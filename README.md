@@ -170,3 +170,4 @@ MIT — see [LICENSE](./LICENSE) for details.
 ---
 
 <p align="center">Built with ☕ by the CSE323 Team — EJUST 2026</p>
+
