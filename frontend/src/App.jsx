@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Outlet, useNavigate, Navigate } 
 import Login from "./features/auth/auth_components";
 import MenuPage from "./features/menu-cart/MenuPage";
 import AdminPanel from "./features/menu-cart/AdminPanel";
-import OrderPaymentApp from "./OrderPaymentApp";
+import OrderPaymentApp from "./order_payment";
 
 // 1. Route Protector: Kicks unauthenticated users back to login
 function ProtectedRoute({ user, children }) {
