@@ -2,7 +2,7 @@
 -- Owner: Member 2 (Menu & Cart)
 
 -- Menu items table
-CREATE TABLE menu_items (
+CREATE TABLE IF NOT EXISTS menu_items (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(255) NOT NULL,
     category    VARCHAR(100) NOT NULL,
@@ -15,20 +15,20 @@ CREATE TABLE menu_items (
 );
 
 -- Vouchers table
-CREATE TABLE vouchers (
+CREATE TABLE IF NOT EXISTS vouchers (
     id          SERIAL PRIMARY KEY,
     code        VARCHAR(50) NOT NULL UNIQUE,
     discount    NUMERIC(10,2) NOT NULL CHECK (discount > 0),
     min_order   NUMERIC(10,2) NOT NULL DEFAULT 0,
     expires_at  TIMESTAMP NOT NULL,
-    used_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    used_by     UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at  TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- Cart sessions table
-CREATE TABLE cart_sessions (
+CREATE TABLE IF NOT EXISTS cart_sessions (
     id          SERIAL PRIMARY KEY,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     items       JSONB NOT NULL DEFAULT '[]',
     locked_at   TIMESTAMP,
     created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -36,13 +36,13 @@ CREATE TABLE cart_sessions (
 );
 
 -- Indexes for performance (FR10 — search < 1 second)
-CREATE INDEX idx_menu_items_category ON menu_items(category);
-CREATE INDEX idx_menu_items_active   ON menu_items(active);
-CREATE INDEX idx_cart_sessions_user  ON cart_sessions(user_id);
-CREATE UNIQUE INDEX idx_vouchers_code ON vouchers(code);
+CREATE INDEX IF NOT EXISTS idx_menu_items_category ON menu_items(category);
+CREATE INDEX IF NOT EXISTS idx_menu_items_active   ON menu_items(active);
+CREATE INDEX IF NOT EXISTS idx_cart_sessions_user  ON cart_sessions(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
 
 -- Full-text search index on menu item name (FR10)
-CREATE INDEX idx_menu_items_name_fts ON menu_items USING GIN(to_tsvector('english', name));
+CREATE INDEX IF NOT EXISTS idx_menu_items_name_fts ON menu_items USING GIN(to_tsvector('english', name));
 
 -- Rollback (down)
 -- DROP TABLE IF EXISTS cart_sessions;

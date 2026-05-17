@@ -55,18 +55,18 @@ def search_menu():
 # ── Cart Routes ──────────────────────────────────────────
 
 # FR11, FR12 — View cart
-@app.route("/api/cart/<int:user_id>", methods=["GET"])
+@app.route("/api/cart/<string:user_id>", methods=["GET"])
 def get_cart(user_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s::uuid", (user_id,))
     cart = cur.fetchone()
     cur.close()
     conn.close()
     return jsonify(cart or {"user_id": user_id, "items": [], "locked_at": None})
 
 # FR11 — Add item to cart
-@app.route("/api/cart/<int:user_id>/add", methods=["POST"])
+@app.route("/api/cart/<string:user_id>/add", methods=["POST"])
 def add_to_cart(user_id):
     data = request.json
     item_id = data.get("item_id")
@@ -89,17 +89,17 @@ def add_to_cart(user_id):
         return jsonify({"error": "Not enough stock"}), 400
 
     # Upsert cart
-    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s::uuid", (user_id,))
     cart = cur.fetchone()
     if cart:
         cur.execute("""
             UPDATE cart_sessions SET items = items || %s::jsonb, updated_at = NOW()
-            WHERE user_id = %s
+            WHERE user_id = %s::uuid
         """, ([{"item_id": item_id, "qty": qty, "price": float(item["price"])}], user_id))
     else:
         cur.execute("""
             INSERT INTO cart_sessions (user_id, items)
-            VALUES (%s, %s::jsonb)
+            VALUES (%s::uuid, %s::jsonb)
         """, (user_id, [{"item_id": item_id, "qty": qty, "price": float(item["price"])}]))
 
     conn.commit()
@@ -108,7 +108,7 @@ def add_to_cart(user_id):
     return jsonify({"message": "Item added to cart"})
 
 # FR13, FR14, FR15, FR16 — Apply voucher
-@app.route("/api/cart/<int:user_id>/voucher", methods=["POST"])
+@app.route("/api/cart/<string:user_id>/voucher", methods=["POST"])
 def apply_voucher(user_id):
     code = request.json.get("code")
     conn = get_db()
@@ -128,10 +128,14 @@ def apply_voucher(user_id):
         return jsonify({"error": "Voucher already used"}), 400
 
     # FR15 — check no voucher already applied on cart
-    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT * FROM cart_sessions WHERE user_id = %s::uuid", (user_id,))
     cart = cur.fetchone()
     if not cart:
         return jsonify({"error": "Cart is empty"}), 400
+
+    # FR15 — check voucher not already applied
+    if cart.get("voucher_code"):
+        return jsonify({"error": "A voucher has already been applied. Stacking is not allowed"}), 400
 
     # Calculate total
     items = cart["items"]
@@ -141,6 +145,12 @@ def apply_voucher(user_id):
     discount = float(voucher["discount"])
     new_total = max(0, total - discount)
 
+    # Mark voucher as used
+    cur.execute("""
+        UPDATE vouchers SET used_by = %s::uuid WHERE code = %s
+    """, (user_id, code))
+
+    conn.commit()
     cur.close()
     conn.close()
     return jsonify({
@@ -151,13 +161,13 @@ def apply_voucher(user_id):
     })
 
 # FR17 — Lock cart at checkout
-@app.route("/api/cart/<int:user_id>/lock", methods=["POST"])
+@app.route("/api/cart/<string:user_id>/lock", methods=["POST"])
 def lock_cart(user_id):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
         UPDATE cart_sessions SET locked_at = NOW()
-        WHERE user_id = %s AND locked_at IS NULL
+        WHERE user_id = %s::uuid AND locked_at IS NULL
     """, (user_id,))
     conn.commit()
     cur.close()
