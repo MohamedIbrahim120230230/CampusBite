@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink, Outlet, useNavigate } from "reac
 import Login from "./features/auth/auth_components";
 import MenuPage from "./features/menu-cart/MenuPage";
 import AdminPanel from "./features/menu-cart/AdminPanel";
-
+import StockDashboard from "./features/stock/StockDashboard";
 function CafeteriaLayout() {
   return (
     <div>
@@ -49,7 +49,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LoginPage />} />
-
+        <Route path="/stock" element={<StockDashboard />} />
         <Route element={<CafeteriaLayout />}>
           <Route path="/menu" element={<MenuPage />} />
           <Route path="/admin" element={<AdminPanel />} />

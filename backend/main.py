@@ -7,6 +7,7 @@ from auth.routes import router as auth_router
 import psycopg2
 import psycopg2.extras
 import os
+from stock.routes import router as stock_router
 
 app = FastAPI(title="University Cafeteria API", version="1.0")
 
@@ -19,7 +20,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-
+app.include_router(stock_router)
 def get_db():
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
