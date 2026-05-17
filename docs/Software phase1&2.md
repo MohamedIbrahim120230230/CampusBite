@@ -733,10 +733,10 @@ Every vague adjective from Phase 1 NFRs has been identified, replaced with a mea
 
 # Phase 2 --- Part C: UML Diagrams {#phase-2-part-c-uml-diagrams}
 
-![SSD Diagram](../images/ssd.png)
+![SSD Diagram](./images/ssd.png)
 
 
-![Activity Diagram](../images/activity.png)
+![Activity Diagram](./images/activity.png)
 # 
 
 # 
