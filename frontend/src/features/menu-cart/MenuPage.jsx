@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-
-const API = 'http://127.0.0.1:5001';
-const USER_ID = '94ad2601-fc07-44f3-9e33-561fb34dd80d';
+import { apiFetch } from '../../shared/api'; // Switched to your shared contract utility
 
 export default function MenuPage() {
   const [items, setItems] = useState([]);
@@ -14,26 +11,30 @@ export default function MenuPage() {
   const [voucherMsg, setVoucherMsg] = useState('');
   const [voucherApplied, setVoucherApplied] = useState(false);
 
-  // FR09, FR10 — fetch menu
+  // FR09, FR10 — Fetch menu items automatically when category updates
   useEffect(() => {
     fetchMenu();
   }, [category]);
 
   const fetchMenu = async () => {
     try {
-      if (search) {
-        const res = await axios.get(`${API}/api/menu/search?q=${search}`);
-        setItems(res.data);
-      } else {
-        const res = await axios.get(`${API}/api/menu${category ? `?category=${category}` : ''}`);
-        setItems(res.data);
-      }
+      // Aligns with Contract 6: GET /api/v1/menu/items?category=...&search=...
+      // apiFetch automatically handles the base URL prefix and the JWT authorization header
+      const queryParams = new URLSearchParams({
+        ...(category && { category }),
+        ...(search && { search })
+      }).toString();
+
+      const data = await apiFetch(`/menu/items?${queryParams}`);
+      
+      // Contract 6 envelopes items inside a paginated object: { items: [], total: X }
+      setItems(data.items || []);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch menu:', err);
     }
   };
 
-  // FR11 — add to cart
+  // FR11 — Add item to cart
   const addToCart = async (item) => {
     if (item.stock_qty === 0) return;
     const existing = cart.find(c => c.id === item.id);
@@ -47,23 +48,26 @@ export default function MenuPage() {
       setCart([...cart, { ...item, qty: 1 }]);
     }
 
-    // Sync with backend
+    // Sync with backend using authorization token context instead of hardcoded User IDs
     try {
-      await axios.post(`${API}/api/cart/${USER_ID}/add`, {
-        item_id: item.id,
-        qty: 1
+      await apiFetch('/cart/add', {
+        method: 'POST',
+        body: JSON.stringify({
+          item_id: item.id,
+          qty: 1
+        })
       });
     } catch (err) {
       console.error('Cart sync error:', err);
     }
   };
 
-  // FR12 — remove from cart
+  // FR12 — Remove from cart
   const removeFromCart = (id) => {
     setCart(cart.filter(c => c.id !== id));
   };
 
-  // FR12 — update quantity
+  // FR12 — Update quantity
   const updateQty = (id, qty) => {
     if (qty < 1) { removeFromCart(id); return; }
     const item = items.find(i => i.id === id);
@@ -74,32 +78,36 @@ export default function MenuPage() {
     setCart(cart.map(c => c.id === id ? { ...c, qty } : c));
   };
 
-  // Cart total
+  // Cart calculation aggregates
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   const finalTotal = Math.max(0, total - discount); // FR16
 
-  // FR13 — apply voucher
+  // FR13 — Apply voucher
   const applyVoucher = async () => {
-    // FR15 — prevent stacking
+    // FR15 — Prevent stacking
     if (voucherApplied) {
       setVoucherMsg('A voucher has already been applied. Stacking is not allowed');
       return;
     }
     try {
-      const res = await axios.post(`${API}/api/cart/${USER_ID}/voucher`, { code: voucher });
-      setDiscount(res.data.discount);
-      setVoucherMsg(`Voucher applied! You save ${res.data.discount} EGP`);
+      const data = await apiFetch('/cart/voucher', {
+        method: 'POST',
+        body: JSON.stringify({ code: voucher })
+      });
+      setDiscount(data.discount);
+      setVoucherMsg(`Voucher applied! You save ${data.discount} EGP`);
       setVoucherApplied(true);
     } catch (err) {
-      setVoucherMsg(err.response?.data?.error || 'Invalid voucher');
+      // Uses standard machine-readable error codes from the registry
+      setVoucherMsg(err.message || 'Invalid voucher');
       setDiscount(0);
     }
   };
 
-  // FR17 — lock cart at checkout
+  // FR17 — Lock cart at checkout
   const handleCheckout = async () => {
     try {
-      await axios.post(`${API}/api/cart/${USER_ID}/lock`);
+      await apiFetch('/cart/lock', { method: 'POST' });
       alert('Order placed! Your cart has been locked.');
     } catch (err) {
       console.error('Checkout error:', err);
@@ -122,7 +130,7 @@ export default function MenuPage() {
               placeholder="Search menu..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              onKeyUp={fetchMenu}
+              onKeyUp={(e) => e.key === 'Enter' && fetchMenu()}
             />
             <button className="btn btn-primary" onClick={fetchMenu}>Search</button>
           </div>
