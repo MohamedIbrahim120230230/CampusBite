@@ -232,7 +232,7 @@ export default function AdminPanel() {
   };
 
   return (
-    <>
+<>
       <style>{ADMIN_CSS}</style>
       <div className="ap-page">
         <div className="uc-mesh"  aria-hidden="true" />
@@ -252,8 +252,14 @@ export default function AdminPanel() {
             <button className="mp-nav-tab" onClick={() => navigate("/menu")}>
               <i className="bi bi-storefront" /> Menu
             </button>
+            
             <button className="mp-nav-tab mp-nav-tab--active">
               <i className="bi bi-gear-fill" /> Admin
+            </button>
+            
+            {/* 📦 Stock Button Added Here */}
+            <button className="mp-nav-tab" onClick={() => navigate("/stock")}>
+              <i className="bi bi-boxes" /> Stock
             </button>
           </div>
 

@@ -1,93 +1,34 @@
 // ============================================================
-// frontend/stock/StockDashboard.jsx
-// Stock & Resilience — Member 4 (feature/stock-resilience)
-// Covers: FR11, FR19, FR21, FR22, FR24, FR25, FR41, FR54
-// UI: React + Bootstrap 5 CSS
+// frontend/src/features/stock/StockDashboard.jsx
+// Member 4 — Stock & Resilience  (feature/stock-resilience)
+// FR11 FR19 FR21 FR22 FR24 FR25 FR37 FR38 FR40 FR41 FR54
+// TDP-M4-01 Cancellation · TDP-M4-02 Auto-Cancel · TDP-M4-03 Inconsistency
+// Theme: identical design tokens as Login.jsx / MenuPage.jsx
 // ============================================================
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 
-// ── Inject Bootstrap 5 + Bootstrap Icons ─────────────────────
+// ── Fonts & Icons (same as Login) ─────────────────────────────
 if (typeof document !== "undefined") {
-  if (!document.querySelector('link[href*="bootstrap@5"]')) {
-    const bs = document.createElement("link");
-    bs.rel  = "stylesheet";
-    bs.href = "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css";
-    document.head.appendChild(bs);
+  if (!document.querySelector('link[href*="Sora"]')) {
+    const f = document.createElement("link");
+    f.rel = "stylesheet";
+    f.href = "https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=DM+Sans:wght@400;500;600&display=swap";
+    document.head.appendChild(f);
   }
   if (!document.querySelector('link[href*="bootstrap-icons"]')) {
-    const bi = document.createElement("link");
-    bi.rel  = "stylesheet";
-    bi.href = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css";
-    document.head.appendChild(bi);
+    const i = document.createElement("link");
+    i.rel = "stylesheet";
+    i.href = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css";
+    document.head.appendChild(i);
   }
 }
 
-// ── Brand CSS variables (matches auth member's palette) ───────
-const GLOBAL_CSS = `
-  :root {
-    --uc-primary:   #2563eb;
-    --uc-success:   #16a34a;
-    --uc-warning:   #d97706;
-    --uc-danger:    #dc2626;
-    --uc-muted:     #6b7280;
-    --uc-surface:   #f8fafc;
-    --uc-border:    #e2e8f0;
-    --uc-radius:    12px;
-    --uc-shadow:    0 1px 4px rgba(0,0,0,.08);
-  }
-  .uc-card {
-    background: #fff;
-    border: 1px solid var(--uc-border);
-    border-radius: var(--uc-radius);
-    box-shadow: var(--uc-shadow);
-  }
-  .uc-badge-available   { background: #dcfce7; color: #15803d; }
-  .uc-badge-low         { background: #fef9c3; color: #854d0e; }
-  .uc-badge-locked      { background: #dbeafe; color: #1d4ed8; }
-  .uc-badge-outofstock  { background: #fee2e2; color: #b91c1c; }
-  .uc-badge-flagged     { background: #fef3c7; color: #92400e; }
-  .uc-stock-bar-track {
-    height: 6px; border-radius: 99px;
-    background: var(--uc-border); overflow: hidden;
-  }
-  .uc-stock-bar-fill {
-    height: 100%; border-radius: 99px;
-    transition: width .4s ease;
-  }
-  .uc-tab-btn {
-    border: none; background: none; padding: .5rem 1rem;
-    border-bottom: 2px solid transparent;
-    color: var(--uc-muted); font-weight: 500; cursor: pointer;
-    transition: .2s;
-  }
-  .uc-tab-btn.active {
-    border-bottom-color: var(--uc-primary);
-    color: var(--uc-primary);
-  }
-  .uc-pulse { animation: uc-pulse 2s infinite; }
-  @keyframes uc-pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: .4; }
-  }
-  .uc-lock-chip {
-    font-size: .72rem; padding: 2px 8px;
-    border-radius: 99px; font-weight: 600;
-    background: #dbeafe; color: #1e40af;
-  }
-  .uc-stat-card {
-    border-radius: var(--uc-radius);
-    padding: 1.25rem; border: 1px solid var(--uc-border);
-    background: #fff;
-  }
-`;
-
 // ── API helper ────────────────────────────────────────────────
-const API_BASE = "/api/v1/stock";
-
 async function apiFetch(path, options = {}) {
   const token = localStorage.getItem("jwt_token");
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`/api/v1/stock${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -104,60 +45,82 @@ async function apiFetch(path, options = {}) {
   return json.data;
 }
 
-// ── Stock colour logic ────────────────────────────────────────
-function stockColor(available, total) {
-  if (available <= 0)          return "#ef4444";
-  if (available / total < 0.2) return "#f59e0b";
-  return "#22c55e";
+// ── Stock helpers ─────────────────────────────────────────────
+function stockStatus(available, total) {
+  if (available <= 0)                        return { label: "Out of Stock", color: "var(--uc-danger)", cls: "oos" };
+  if (available / (total || 1) < 0.2)       return { label: "Low Stock",    color: "var(--uc-warn)",   cls: "low" };
+  return                                            { label: "Available",    color: "var(--uc-acc2)",   cls: "ok"  };
 }
 
-function stockLabel(available, total) {
-  if (available <= 0)          return { label: "Out of Stock", cls: "uc-badge-outofstock" };
-  if (available / total < 0.2) return { label: "Low Stock",   cls: "uc-badge-low" };
-  return                                { label: "Available",  cls: "uc-badge-available" };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────────────────────
-
-// ── Toast notification ────────────────────────────────────────
-function Toast({ toasts, dismiss }) {
+// ── Toast ─────────────────────────────────────────────────────
+function Toast({ toasts, removeToast }) {
   return (
-    <div
-      aria-live="polite"
-      style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, maxWidth: 360 }}
-    >
+    <div style={{ position:"fixed", bottom:24, right:24, zIndex:9999, display:"flex", flexDirection:"column", gap:8 }}>
       {toasts.map(t => (
-        <div
-          key={t.id}
-          className={`alert alert-${t.type} alert-dismissible shadow-sm mb-2 d-flex align-items-center gap-2`}
-          style={{ borderRadius: 10, fontSize: ".9rem" }}
-        >
-          <i className={`bi bi-${t.type === "success" ? "check-circle" : t.type === "warning" ? "exclamation-triangle" : "x-circle"}`} />
+        <div key={t.id} className={`sd-toast sd-toast--${t.type}`}>
+          <i className={`bi ${t.type==="success"?"bi-check-circle-fill":t.type==="warn"?"bi-exclamation-triangle-fill":"bi-x-circle-fill"}`} />
           <span>{t.message}</span>
-          <button type="button" className="btn-close ms-auto" onClick={() => dismiss(t.id)} />
+          <button onClick={() => removeToast(t.id)} className="sd-toast-close"><i className="bi bi-x" /></button>
         </div>
       ))}
     </div>
   );
 }
 
+function useToast() {
+  const [toasts, setToasts] = useState([]);
+  const add = useCallback((message, type = "success") => {
+    const id = Date.now() + Math.random();
+    setToasts(p => [...p, { id, message, type }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+  }, []);
+  const remove = useCallback(id => setToasts(p => p.filter(t => t.id !== id)), []);
+  return { toasts, addToast: add, removeToast: remove };
+}
+
+// ── Confirm modal ─────────────────────────────────────────────
+function ConfirmModal({ title, message, confirmLabel, danger, onConfirm, onCancel, loading, children }) {
+  return (
+    <>
+      <div className="sd-backdrop" onClick={onCancel} />
+      <div className="sd-modal-wrap" role="dialog" aria-modal="true">
+        <div className="sd-modal">
+          <div className="sd-modal-hd">
+            <h3 className="sd-modal-title">{title}</h3>
+            <button className="sd-icon-btn" onClick={onCancel} aria-label="Close"><i className="bi bi-x-lg" /></button>
+          </div>
+          {message && <p className="sd-modal-msg">{message}</p>}
+          {children}
+          <div className="sd-modal-actions">
+            <button className="sd-ghost-btn" onClick={onCancel} disabled={loading}>Cancel</button>
+            <button
+              className={`sd-action-btn ${danger ? "sd-action-btn--danger" : "sd-action-btn--primary"}`}
+              onClick={onConfirm}
+              disabled={loading}
+            >
+              {loading ? <><span className="sd-spinner-sm" /> Processing…</> : confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── Stock bar ─────────────────────────────────────────────────
 function StockBar({ available, total, locked }) {
   const pct  = total > 0 ? Math.max(0, (available / total) * 100) : 0;
-  const lpct = total > 0 ? Math.min(100, (locked / total) * 100)  : 0;
+  const lpct = total > 0 ? Math.min(100, (locked  / total) * 100) : 0;
+  const { color } = stockStatus(available, total);
   return (
     <div>
-      <div className="uc-stock-bar-track">
-        <div
-          className="uc-stock-bar-fill"
-          style={{ width: `${pct}%`, background: stockColor(available, total) }}
-        />
+      <div className="sd-bar-track">
+        <div className="sd-bar-fill" style={{ width:`${pct}%`, background:color }} />
+        {lpct > 0 && <div className="sd-bar-locked" style={{ width:`${lpct}%` }} />}
       </div>
-      <div className="d-flex justify-content-between mt-1" style={{ fontSize: ".72rem", color: "#6b7280" }}>
-        <span>{available} available</span>
-        {locked > 0 && <span className="uc-lock-chip"><i className="bi bi-lock-fill me-1" />{locked} locked</span>}
+      <div className="sd-bar-labels">
+        <span>{available} free</span>
+        {locked > 0 && <span className="sd-lock-chip"><i className="bi bi-lock-fill" /> {locked} locked</span>}
         <span>{total} total</span>
       </div>
     </div>
@@ -165,78 +128,90 @@ function StockBar({ available, total, locked }) {
 }
 
 // ── Stat card ─────────────────────────────────────────────────
-function StatCard({ icon, label, value, color = "#2563eb", sub }) {
+function StatCard({ icon, label, value, color, sub }) {
   return (
-    <div className="uc-stat-card">
-      <div className="d-flex align-items-center gap-2 mb-1">
-        <i className={`bi bi-${icon}`} style={{ color, fontSize: "1.2rem" }} />
-        <span style={{ fontSize: ".8rem", color: "#6b7280", fontWeight: 500 }}>{label}</span>
+    <div className="sd-stat">
+      <i className={`bi ${icon}`} style={{ color, fontSize:22 }} />
+      <div>
+        <div className="sd-stat-val" style={{ color }}>{value}</div>
+        <div className="sd-stat-label">{label}</div>
+        {sub && <div className="sd-stat-sub">{sub}</div>}
       </div>
-      <div style={{ fontSize: "1.7rem", fontWeight: 700, color }}>{value}</div>
-      {sub && <div style={{ fontSize: ".75rem", color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Main Dashboard
-// ─────────────────────────────────────────────────────────────
+// ── Txn badge ─────────────────────────────────────────────────
+function TxnBadge({ type }) {
+  const map = {
+    RESERVE:      { color:"var(--uc-acc)",    icon:"bi-lock-fill"       },
+    DEDUCT:       { color:"var(--uc-danger)", icon:"bi-dash-circle-fill" },
+    RELEASE:      { color:"var(--uc-acc2)",   icon:"bi-unlock-fill"     },
+    RESTOCK:      { color:"#a78bfa",          icon:"bi-plus-circle-fill" },
+    CORRECTION:   { color:"var(--uc-warn)",   icon:"bi-pencil-fill"     },
+    ADMIN_DEDUCT: { color:"var(--uc-muted)",  icon:"bi-trash-fill"      },
+  };
+  const m = map[type] || { color:"var(--uc-muted)", icon:"bi-question-circle" };
+  return (
+    <span className="sd-txn-badge" style={{ color:m.color, borderColor:`${m.color}33`, background:`${m.color}11` }}>
+      <i className={`bi ${m.icon}`} /> {type}
+    </span>
+  );
+}
 
+// ════════════════════════════════════════════════════════════
+// MAIN DASHBOARD
+// ════════════════════════════════════════════════════════════
 export default function StockDashboard() {
-  const [tab,         setTab]         = useState("overview");   // overview | locks | flagged | config | ledger
-  const [items,       setItems]       = useState([]);
-  const [activeLocks, setActiveLocks] = useState([]);
-  const [flagged,     setFlagged]     = useState([]);
-  const [config,      setConfig]      = useState([]);
-  const [ledger,      setLedger]      = useState({ transactions: [], total: 0 });
-  const [ledgerItem,  setLedgerItem]  = useState(null);
-  const [loading,     setLoading]     = useState(false);
-  const [toasts,      setToasts]      = useState([]);
-  const [search,      setSearch]      = useState("");
-  const [restockModal, setRestockModal] = useState(null);  // menu_item row
-  const [correctModal, setCorrectModal] = useState(null);
+  const navigate = useNavigate();
+  const { toasts, addToast, removeToast } = useToast();
+
+  const [tab,          setTab]          = useState("overview");
+  const [items,        setItems]        = useState([]);
+  const [activeLocks,  setActiveLocks]  = useState([]);
+  const [flagged,      setFlagged]      = useState([]);
+  const [config,       setConfig]       = useState([]);
+  const [ledger,       setLedger]       = useState({ transactions:[], total:0 });
+  const [ledgerItem,   setLedgerItem]   = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [search,       setSearch]       = useState("");
+
+  // Modals
+  const [restockModal, setRestockModal] = useState(null);
   const [restockQty,   setRestockQty]   = useState(1);
   const [restockNote,  setRestockNote]  = useState("");
+  const [correctModal, setCorrectModal] = useState(null);
   const [correctQty,   setCorrectQty]   = useState(0);
   const [correctNote,  setCorrectNote]  = useState("");
-  const [configEdit,   setConfigEdit]   = useState({});     // key → value being edited
-  const toastId = useRef(0);
+  const [configEdit,   setConfigEdit]   = useState({});
 
-  // ── Toast helpers ──────────────────────────────────────────
-  const addToast = useCallback((message, type = "success") => {
-    const id = ++toastId.current;
-    setToasts(t => [...t, { id, message, type }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
-  }, []);
-  const dismissToast = useCallback(id => setToasts(t => t.filter(x => x.id !== id)), []);
-
-  // ── Data loaders ───────────────────────────────────────────
+  // ── Loaders ───────────────────────────────────────────────
   const loadItems = useCallback(async () => {
     try {
       const data = await apiFetch("/availability");
-      setItems(data);
-    } catch (e) { addToast(e.message || "Failed to load stock.", "danger"); }
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) { addToast(e.message || "Failed to load stock.", "error"); }
   }, [addToast]);
 
   const loadLocks = useCallback(async () => {
     try {
       const data = await apiFetch("/locks/active");
       setActiveLocks(data.active_locks || []);
-    } catch (e) { addToast(e.message || "Failed to load locks.", "danger"); }
+    } catch (e) { addToast(e.message || "Failed to load locks.", "error"); }
   }, [addToast]);
 
   const loadFlagged = useCallback(async () => {
     try {
       const data = await apiFetch("/flagged?status=PENDING");
       setFlagged(Array.isArray(data) ? data : []);
-    } catch (e) { addToast(e.message || "Failed to load flagged orders.", "danger"); }
+    } catch (e) { addToast(e.message || "Failed to load flagged orders.", "error"); }
   }, [addToast]);
 
   const loadConfig = useCallback(async () => {
     try {
       const data = await apiFetch("/config");
       setConfig(Array.isArray(data) ? data : []);
-    } catch (e) { addToast(e.message || "Failed to load config.", "danger"); }
+    } catch (e) { addToast(e.message || "Failed to load config.", "error"); }
   }, [addToast]);
 
   const loadLedger = useCallback(async (itemId) => {
@@ -244,13 +219,11 @@ export default function StockDashboard() {
     try {
       const data = await apiFetch(`/transactions/${itemId}`);
       setLedger(data);
-    } catch (e) { addToast(e.message || "Failed to load ledger.", "danger"); }
+    } catch (e) { addToast(e.message || "Failed to load ledger.", "error"); }
   }, [addToast]);
 
-  // ── Initial load ───────────────────────────────────────────
   useEffect(() => {
     loadItems();
-    // Auto-refresh every 30 seconds (FR36-style live update)
     const id = setInterval(loadItems, 30000);
     return () => clearInterval(id);
   }, [loadItems]);
@@ -262,7 +235,7 @@ export default function StockDashboard() {
     if (tab === "ledger" && ledgerItem) loadLedger(ledgerItem);
   }, [tab, loadLocks, loadFlagged, loadConfig, loadLedger, ledgerItem]);
 
-  // ── Restock submit ─────────────────────────────────────────
+  // ── Restock ────────────────────────────────────────────────
   const handleRestock = async () => {
     if (!restockModal) return;
     setLoading(true);
@@ -276,12 +249,11 @@ export default function StockDashboard() {
       setRestockQty(1);
       setRestockNote("");
       loadItems();
-    } catch (e) {
-      addToast(e.message || "Restock failed.", "danger");
-    } finally { setLoading(false); }
+    } catch (e) { addToast(e.message || "Restock failed.", "error"); }
+    finally { setLoading(false); }
   };
 
-  // ── Correction submit ──────────────────────────────────────
+  // ── Correction ─────────────────────────────────────────────
   const handleCorrection = async () => {
     if (!correctModal) return;
     setLoading(true);
@@ -290,20 +262,17 @@ export default function StockDashboard() {
         method: "POST",
         body: JSON.stringify({ new_quantity: correctQty, note: correctNote }),
       });
-      addToast(
-        `Stock corrected for "${correctModal.item_name}": ${data.old_qty} → ${data.new_qty}`,
-        "warning",
-      );
+      addToast(`Corrected "${correctModal.item_name}": ${data.old_qty} → ${data.new_qty}`, "warn");
       setCorrectModal(null);
       setCorrectQty(0);
       setCorrectNote("");
       loadItems();
-    } catch (e) {
-      addToast(e.message || "Correction failed.", "danger");
-    } finally { setLoading(false); }
+    } catch (e) { addToast(e.message || "Correction failed.", "error"); }
+    finally { setLoading(false); }
   };
 
-  // ── Flagged order review ───────────────────────────────────
+  // ── TDP-M4-01: Flagged order review ───────────────────────
+  // P3: Staff must supply reason_code — enforced in FlaggedCard
   const handleReview = async (flaggedId, action, reason) => {
     setLoading(true);
     try {
@@ -311,11 +280,24 @@ export default function StockDashboard() {
         method: "POST",
         body: JSON.stringify({ action, reason: reason || null }),
       });
-      addToast(`Order ${action === "approve" ? "approved" : "rejected"} successfully.`, "success");
+      addToast(`Order ${action === "approve" ? "approved" : "rejected"}.`, "success");
       loadFlagged();
-    } catch (e) {
-      addToast(e.message || "Review failed.", "danger");
-    } finally { setLoading(false); }
+    } catch (e) { addToast(e.message || "Review failed.", "error"); }
+    finally { setLoading(false); }
+  };
+
+  // ── TDP-M4-02: Expire stale locks (FR40 auto-cancel TTL = 600s) ─
+  const handleExpireLocks = async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch("/locks/expire", { method: "POST" });
+      addToast(
+        `Expired ${data.locks_expired} lock(s). Auto-cancelled ${data.flagged_orders_cancelled} order(s).`,
+        "warn",
+      );
+      loadLocks();
+    } catch (e) { addToast(e.message || "Expire job failed.", "error"); }
+    finally { setLoading(false); }
   };
 
   // ── Config update ──────────────────────────────────────────
@@ -328,619 +310,489 @@ export default function StockDashboard() {
         method: "PATCH",
         body: JSON.stringify({ value: String(value) }),
       });
-      addToast(`Config "${key}" updated.`, "success");
+      addToast(`"${key}" updated.`, "success");
       setConfigEdit(e => { const c = {...e}; delete c[key]; return c; });
       loadConfig();
-    } catch (e) {
-      addToast(e.message || "Config update failed.", "danger");
-    } finally { setLoading(false); }
+    } catch (e) { addToast(e.message || "Config update failed.", "error"); }
+    finally { setLoading(false); }
   };
 
-  // ── Expire stale locks ─────────────────────────────────────
-  const handleExpireLocks = async () => {
-    setLoading(true);
-    try {
-      const data = await apiFetch("/locks/expire", { method: "POST" });
-      addToast(`Expired ${data.locks_expired} lock(s). Auto-cancelled ${data.flagged_orders_cancelled} flagged order(s).`, "warning");
-      loadLocks();
-    } catch (e) {
-      addToast(e.message || "Expire job failed.", "danger");
-    } finally { setLoading(false); }
+  // ── Logout ─────────────────────────────────────────────────
+  const handleLogout = async () => {
+    try { await apiFetch("/auth/logout", { method: "POST" }); } catch (_) {}
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("user");
+    navigate("/");
   };
 
-  // ── Computed stats ─────────────────────────────────────────
-  const totalItems    = items.length;
-  const outOfStock    = items.filter(i => i.available_qty <= 0).length;
-  const lowStock      = items.filter(i => i.available_qty > 0 && i.available_qty / (i.total_qty || 1) < 0.2).length;
-  const totalLocked   = items.reduce((s, i) => s + (i.locked_qty || 0), 0);
+  // ── Stats ──────────────────────────────────────────────────
+  const totalItems  = items.length;
+  const oos         = items.filter(i => i.available_qty <= 0).length;
+  const lowStock    = items.filter(i => i.available_qty > 0 && i.available_qty / (i.total_qty || 1) < 0.2).length;
+  const totalLocked = items.reduce((s, i) => s + (i.locked_qty || 0), 0);
 
-  // ── Filtered items ─────────────────────────────────────────
   const filtered = items.filter(i =>
-    i.item_name.toLowerCase().includes(search.toLowerCase())
+    i.item_name?.toLowerCase().includes(search.toLowerCase())
   );
+
+  const TABS = [
+    { key:"overview", icon:"bi-grid-3x3-gap-fill", label:"Overview"       },
+    { key:"locks",    icon:"bi-lock-fill",          label:"Active Locks"   },
+    { key:"flagged",  icon:"bi-flag-fill",          label:"Flagged", badge: flagged.length || null },
+    { key:"ledger",   icon:"bi-journal-text",       label:"Ledger"         },
+    { key:"config",   icon:"bi-sliders",            label:"Config (FR54)"  },
+  ];
 
   return (
     <>
-      <style>{GLOBAL_CSS}</style>
+      <style>{SD_CSS}</style>
+      <div className="sd-page">
+        <div className="uc-mesh" aria-hidden="true" />
+        <div className="uc-grid" aria-hidden="true" />
 
-      {/* ── Header ─────────────────────────────────────────── */}
-      <div className="px-3 px-md-4 pt-4 pb-2">
-        <div className="d-flex align-items-center gap-3 mb-1">
-          <div
-            style={{
-              width: 42, height: 42, borderRadius: 10,
-              background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}
-          >
-            <i className="bi bi-boxes text-white" style={{ fontSize: "1.2rem" }} />
+        {/* ── Navbar ── */}
+        <nav className="mp-nav">
+          <div className="mp-nav-brand">
+            <div className="mp-nav-logo">📦</div>
+            <span className="mp-nav-name">Stock Control</span>
           </div>
-          <div>
-            <h5 className="mb-0 fw-bold" style={{ color: "#111827" }}>Stock & Resilience</h5>
-            <small style={{ color: "#6b7280" }}>Member 4 — feature/stock-resilience</small>
-          </div>
-          <button
-            className="btn btn-sm btn-outline-secondary ms-auto"
-            onClick={loadItems}
-            title="Refresh"
-          >
-            <i className="bi bi-arrow-clockwise" /> Refresh
-          </button>
-        </div>
-      </div>
+          <div className="mp-nav-actions">
 
-      {/* ── Stat Cards ─────────────────────────────────────── */}
-      <div className="px-3 px-md-4 pb-3">
-        <div className="row g-3">
-          <div className="col-6 col-md-3">
-            <StatCard icon="box-seam" label="Total Items" value={totalItems} color="#2563eb" />
-          </div>
-          <div className="col-6 col-md-3">
-            <StatCard icon="x-circle" label="Out of Stock" value={outOfStock} color="#dc2626"
-              sub={outOfStock > 0 ? "Action needed" : "All stocked"} />
-          </div>
-          <div className="col-6 col-md-3">
-            <StatCard icon="exclamation-triangle" label="Low Stock" value={lowStock} color="#d97706"
-              sub="< 20% remaining" />
-          </div>
-          <div className="col-6 col-md-3">
-            <StatCard icon="lock" label="Locked Units" value={totalLocked} color="#7c3aed"
-              sub="Active stock locks" />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Tabs ───────────────────────────────────────────── */}
-      <div className="px-3 px-md-4">
-        <div className="d-flex gap-1 border-bottom mb-3" style={{ overflowX: "auto" }}>
-          {[
-            { key: "overview", icon: "grid",           label: "Stock Overview" },
-            { key: "locks",    icon: "lock",            label: "Active Locks" },
-            { key: "flagged",  icon: "flag",            label: "Flagged Orders", badge: flagged.length || null },
-            { key: "ledger",   icon: "journal-text",    label: "Ledger" },
-            { key: "config",   icon: "sliders",         label: "Config (FR54)" },
-          ].map(t => (
-            <button
-              key={t.key}
-              className={`uc-tab-btn ${tab === t.key ? "active" : ""}`}
-              onClick={() => setTab(t.key)}
-              style={{ whiteSpace: "nowrap" }}
-            >
-              <i className={`bi bi-${t.icon} me-1`} />
-              {t.label}
-              {t.badge ? (
-                <span className="badge bg-danger ms-1 rounded-pill">{t.badge}</span>
-              ) : null}
+            <button className="sd-ghost-btn" onClick={() => navigate("/menu")}>
+              <i className="bi bi-storefront me-1" />Menu
             </button>
-          ))}
-        </div>
+            <button className="mp-logout-btn" onClick={handleLogout} title="Sign out">
+              <i className="bi bi-box-arrow-right" />
+            </button>
+          </div>
+        </nav>
 
-        {/* ── Tab: Stock Overview ──────────────────────────── */}
-        {tab === "overview" && (
-          <div>
-            <div className="mb-3">
-              <div className="input-group" style={{ maxWidth: 320 }}>
-                <span className="input-group-text bg-white border-end-0">
-                  <i className="bi bi-search text-muted" />
-                </span>
+        <div className="sd-body">
+
+          {/* ── Stats ── */}
+          <div className="sd-stats">
+            <StatCard icon="bi-box-seam"              label="Total Items"   value={totalItems}  color="var(--uc-acc)"    />
+            <StatCard icon="bi-x-circle-fill"         label="Out of Stock"  value={oos}         color="var(--uc-danger)" sub={oos > 0 ? "Action needed" : "All stocked"} />
+            <StatCard icon="bi-exclamation-triangle-fill" label="Low Stock" value={lowStock}    color="var(--uc-warn)"   sub="< 20% remaining" />
+            <StatCard icon="bi-lock-fill"             label="Locked Units"  value={totalLocked} color="#a78bfa"          sub="Active locks" />
+          </div>
+
+          {/* ── Tabs ── */}
+          <div className="sd-tabs" role="tablist">
+            {TABS.map(t => (
+              <button
+                key={t.key}
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`sd-tab ${tab === t.key ? "sd-tab--active" : ""}`}
+                onClick={() => setTab(t.key)}
+              >
+                <i className={`bi ${t.icon}`} aria-hidden="true" />
+                {t.label}
+                {t.badge ? <span className="sd-tab-badge">{t.badge}</span> : null}
+              </button>
+            ))}
+          </div>
+
+          {/* ══ TAB: Overview ══ */}
+          {tab === "overview" && (
+            <div>
+              <div className="sd-search-wrap">
+                <i className="bi bi-search sd-search-ico" />
                 <input
-                  className="form-control border-start-0"
+                  className="sd-search"
                   placeholder="Search items…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
               </div>
-            </div>
 
-            {filtered.length === 0 && (
-              <div className="text-center py-5 text-muted">
-                <i className="bi bi-box-seam" style={{ fontSize: "2rem" }} /><br />
-                No items found.
-              </div>
-            )}
-
-            <div className="row g-3">
-              {filtered.map(item => {
-                const sl = stockLabel(item.available_qty, item.total_qty);
-                return (
-                  <div key={item.menu_item_id} className="col-12 col-md-6 col-xl-4">
-                    <div className="uc-card p-3 h-100">
-                      {/* Header row */}
-                      <div className="d-flex align-items-start justify-content-between mb-2">
-                        <div>
-                          <div className="fw-semibold" style={{ fontSize: ".95rem", color: "#111827" }}>
-                            {item.item_name}
+              {filtered.length === 0 ? (
+                <div className="sd-empty">
+                  <span style={{fontSize:40}}>📦</span>
+                  <p>No stock items found.</p>
+                </div>
+              ) : (
+                <div className="sd-grid">
+                  {filtered.map(item => {
+                    const s = stockStatus(item.available_qty, item.total_qty);
+                    return (
+                      <div key={item.menu_item_id} className="sd-card">
+                        <div className="sd-card-hd">
+                          <div>
+                            <div className="sd-item-name">{item.item_name}</div>
+                            <div className="sd-item-sub">Max order: {item.max_order_qty} / item</div>
                           </div>
-                          <div style={{ fontSize: ".78rem", color: "#6b7280" }}>
-                            Max order: {item.max_order_qty} / item
-                          </div>
+                          <span className="sd-status-badge" style={{ color:s.color, borderColor:`${s.color}33`, background:`${s.color}11` }}>
+                            {s.label}
+                          </span>
                         </div>
-                        <span className={`badge ${sl.cls} rounded-pill`}>{sl.label}</span>
-                      </div>
 
-                      {/* Stock bar */}
-                      <StockBar
-                        available={item.available_qty}
-                        total={item.total_qty}
-                        locked={item.locked_qty}
-                      />
-
-                      {/* Action buttons */}
-                      <div className="d-flex gap-2 mt-3">
-                        <button
-                          className="btn btn-sm btn-outline-primary flex-fill"
-                          onClick={() => {
-                            setRestockModal(item);
-                            setRestockQty(1);
-                            setRestockNote("");
-                          }}
-                        >
-                          <i className="bi bi-plus-circle me-1" />Restock
-                        </button>
-                        <button
-                          className="btn btn-sm btn-outline-warning flex-fill"
-                          onClick={() => {
-                            setCorrectModal(item);
-                            setCorrectQty(item.total_qty);
-                            setCorrectNote("");
-                          }}
-                        >
-                          <i className="bi bi-pencil-square me-1" />Correct
-                        </button>
-                        <button
-                          className="btn btn-sm btn-outline-secondary"
-                          onClick={() => { setLedgerItem(item.menu_item_id); setTab("ledger"); }}
-                          title="View ledger"
-                        >
-                          <i className="bi bi-journal-text" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ── Tab: Active Locks ────────────────────────────── */}
-        {tab === "locks" && (
-          <div>
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div>
-                <span className="fw-semibold">Active Stock Locks</span>
-                <span className="text-muted ms-2" style={{ fontSize: ".85rem" }}>
-                  FR22 — Pessimistic locks (10-min TTL)
-                </span>
-              </div>
-              <div className="d-flex gap-2">
-                <button className="btn btn-sm btn-outline-secondary" onClick={loadLocks}>
-                  <i className="bi bi-arrow-clockwise me-1" />Refresh
-                </button>
-                <button className="btn btn-sm btn-outline-danger" onClick={handleExpireLocks} disabled={loading}>
-                  <i className="bi bi-clock-history me-1" />Expire Stale
-                </button>
-              </div>
-            </div>
-
-            {activeLocks.length === 0 ? (
-              <div className="text-center py-5 text-muted uc-card p-4">
-                <i className="bi bi-unlock" style={{ fontSize: "2rem" }} /><br />
-                <div className="mt-2">No active stock locks.</div>
-              </div>
-            ) : (
-              <div className="uc-card overflow-hidden">
-                <div className="table-responsive">
-                  <table className="table table-hover mb-0" style={{ fontSize: ".88rem" }}>
-                    <thead className="table-light">
-                      <tr>
-                        <th>Item</th>
-                        <th>Order ID</th>
-                        <th className="text-end">Qty</th>
-                        <th>Locked At</th>
-                        <th>Expires</th>
-                        <th className="text-end">Remaining</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeLocks.map(lock => (
-                        <tr key={lock.id}>
-                          <td className="fw-medium">{lock.item_name}</td>
-                          <td>
-                            <code style={{ fontSize: ".75rem" }}>
-                              {lock.order_id?.slice(0, 8)}…
-                            </code>
-                          </td>
-                          <td className="text-end">{lock.quantity}</td>
-                          <td>{new Date(lock.locked_at).toLocaleTimeString()}</td>
-                          <td>{new Date(lock.expires_at).toLocaleTimeString()}</td>
-                          <td className="text-end">
-                            {lock.seconds_remaining > 0 ? (
-                              <span className={`badge ${lock.seconds_remaining < 60 ? "bg-danger" : "bg-info text-dark"}`}>
-                                {Math.floor(lock.seconds_remaining / 60)}m {lock.seconds_remaining % 60}s
-                              </span>
-                            ) : (
-                              <span className="badge bg-secondary">Expiring…</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Tab: Flagged Orders ──────────────────────────── */}
-        {tab === "flagged" && (
-          <div>
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div>
-                <span className="fw-semibold">Flagged Orders</span>
-                <span className="text-muted ms-2" style={{ fontSize: ".85rem" }}>
-                  FR24 — Pending admin review
-                </span>
-              </div>
-              <button className="btn btn-sm btn-outline-secondary" onClick={loadFlagged}>
-                <i className="bi bi-arrow-clockwise me-1" />Refresh
-              </button>
-            </div>
-
-            {flagged.length === 0 ? (
-              <div className="text-center py-5 text-muted uc-card p-4">
-                <i className="bi bi-check-circle" style={{ fontSize: "2rem", color: "#22c55e" }} /><br />
-                <div className="mt-2">No pending flagged orders.</div>
-              </div>
-            ) : (
-              <div className="d-flex flex-column gap-3">
-                {flagged.map(f => (
-                  <FlaggedOrderCard key={f.id} item={f} onReview={handleReview} loading={loading} />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Tab: Stock Ledger ────────────────────────────── */}
-        {tab === "ledger" && (
-          <div>
-            <div className="d-flex align-items-center gap-3 mb-3">
-              <div>
-                <span className="fw-semibold">Stock Transaction Ledger</span>
-                <span className="text-muted ms-2" style={{ fontSize: ".85rem" }}>
-                  FR41 — Immutable audit log
-                </span>
-              </div>
-              <select
-                className="form-select form-select-sm ms-auto"
-                style={{ maxWidth: 220 }}
-                value={ledgerItem || ""}
-                onChange={e => {
-                  const v = parseInt(e.target.value);
-                  setLedgerItem(v || null);
-                  if (v) loadLedger(v);
-                }}
-              >
-                <option value="">— Select item —</option>
-                {items.map(i => (
-                  <option key={i.menu_item_id} value={i.menu_item_id}>{i.item_name}</option>
-                ))}
-              </select>
-            </div>
-
-            {!ledgerItem ? (
-              <div className="text-center py-5 text-muted uc-card p-4">
-                <i className="bi bi-journal-text" style={{ fontSize: "2rem" }} /><br />
-                <div className="mt-2">Select an item to view its stock ledger.</div>
-              </div>
-            ) : (
-              <div className="uc-card overflow-hidden">
-                <div className="table-responsive">
-                  <table className="table table-hover mb-0" style={{ fontSize: ".86rem" }}>
-                    <thead className="table-light">
-                      <tr>
-                        <th>Type</th>
-                        <th className="text-end">Delta</th>
-                        <th className="text-end">Before</th>
-                        <th className="text-end">After</th>
-                        <th>Order</th>
-                        <th>Note</th>
-                        <th>Timestamp</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(ledger.transactions || []).map(txn => (
-                        <tr key={txn.id}>
-                          <td><TxnTypeBadge type={txn.txn_type} /></td>
-                          <td className={`text-end fw-bold ${txn.quantity_delta < 0 ? "text-danger" : "text-success"}`}>
-                            {txn.quantity_delta > 0 ? "+" : ""}{txn.quantity_delta}
-                          </td>
-                          <td className="text-end text-muted">{txn.quantity_before}</td>
-                          <td className="text-end fw-medium">{txn.quantity_after}</td>
-                          <td>
-                            {txn.order_id ? (
-                              <code style={{ fontSize: ".75rem" }}>{txn.order_id.slice(0, 8)}…</code>
-                            ) : <span className="text-muted">—</span>}
-                          </td>
-                          <td style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {txn.note || <span className="text-muted">—</span>}
-                          </td>
-                          <td style={{ whiteSpace: "nowrap" }}>
-                            {new Date(txn.created_at).toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="px-3 py-2 border-top text-muted" style={{ fontSize: ".8rem" }}>
-                  {ledger.total} total transaction{ledger.total !== 1 ? "s" : ""}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Tab: Config ──────────────────────────────────── */}
-        {tab === "config" && (
-          <div>
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div>
-                <span className="fw-semibold">System Configuration</span>
-                <span className="text-muted ms-2" style={{ fontSize: ".85rem" }}>
-                  FR54 — Live reload ≤ 60 sec
-                </span>
-              </div>
-              <button className="btn btn-sm btn-outline-secondary" onClick={loadConfig}>
-                <i className="bi bi-arrow-clockwise me-1" />Refresh
-              </button>
-            </div>
-
-            <div className="uc-card overflow-hidden">
-              <table className="table mb-0" style={{ fontSize: ".88rem" }}>
-                <thead className="table-light">
-                  <tr>
-                    <th>Parameter</th>
-                    <th>Description</th>
-                    <th style={{ width: 160 }}>Value</th>
-                    <th style={{ width: 80 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {config.map(c => (
-                    <tr key={c.key}>
-                      <td>
-                        <code style={{ fontSize: ".8rem" }}>{c.key}</code>
-                      </td>
-                      <td className="text-muted" style={{ fontSize: ".82rem" }}>{c.description}</td>
-                      <td>
-                        <input
-                          className="form-control form-control-sm"
-                          value={configEdit[c.key] !== undefined ? configEdit[c.key] : c.value}
-                          onChange={e => setConfigEdit(prev => ({ ...prev, [c.key]: e.target.value }))}
+                        <StockBar
+                          available={item.available_qty}
+                          total={item.total_qty}
+                          locked={item.locked_qty}
                         />
-                      </td>
-                      <td>
-                        {configEdit[c.key] !== undefined && configEdit[c.key] !== c.value ? (
-                          <button
-                            className="btn btn-sm btn-primary"
-                            onClick={() => handleConfigSave(c.key)}
-                            disabled={loading}
-                          >
-                            Save
-                          </button>
-                        ) : (
-                          <span className="text-muted" style={{ fontSize: ".8rem" }}>—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
-            <div className="alert alert-info mt-3 d-flex gap-2 align-items-center">
-              <i className="bi bi-info-circle-fill" />
-              <span style={{ fontSize: ".88rem" }}>
-                Changes take effect within 60 seconds without system restart. All updates are audit-logged.
+                        <div className="sd-card-actions">
+                          <button className="sd-action-btn sd-action-btn--primary" onClick={() => { setRestockModal(item); setRestockQty(1); setRestockNote(""); }}>
+                            <i className="bi bi-plus-circle-fill" /> Restock
+                          </button>
+                          <button className="sd-action-btn sd-action-btn--warn" onClick={() => { setCorrectModal(item); setCorrectQty(item.total_qty); setCorrectNote(""); }}>
+                            <i className="bi bi-pencil-fill" /> Correct
+                          </button>
+                          <button className="sd-icon-btn" onClick={() => { setLedgerItem(item.menu_item_id); setTab("ledger"); }} title="View ledger">
+                            <i className="bi bi-journal-text" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ TAB: Active Locks (FR22 — 10-min TTL pessimistic locks) ══ */}
+          {tab === "locks" && (
+            <div>
+              <div className="sd-tab-hd">
+                <div>
+                  <span className="sd-tab-hd-title">Active Stock Locks</span>
+                  <span className="sd-tab-hd-sub">FR22 — Pessimistic locks · 10-min TTL</span>
+                </div>
+                <div className="sd-tab-hd-actions">
+                  <button className="sd-ghost-btn" onClick={loadLocks}><i className="bi bi-arrow-clockwise me-1" />Refresh</button>
+                  {/* TDP-M4-02 P1: expire runs cleanup job that auto-cancels at exactly 600s */}
+                  <button className="sd-action-btn sd-action-btn--danger" onClick={handleExpireLocks} disabled={loading}>
+                    <i className="bi bi-clock-history" /> Expire Stale
+                  </button>
+                </div>
+              </div>
+
+              {activeLocks.length === 0 ? (
+                <div className="sd-empty-card">
+                  <i className="bi bi-unlock-fill" style={{fontSize:32, color:"var(--uc-acc2)"}} />
+                  <p>No active stock locks.</p>
+                </div>
+              ) : (
+                <div className="sd-table-card">
+                  <div className="sd-table-wrap">
+                    <table className="sd-table">
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Order ID</th>
+                          <th>Qty</th>
+                          <th>Locked At</th>
+                          <th>Expires</th>
+                          <th>Remaining</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeLocks.map(lock => {
+                          const secs = lock.seconds_remaining;
+                          const urgent = secs < 60;
+                          return (
+                            <tr key={lock.id}>
+                              <td className="sd-td-name">{lock.item_name}</td>
+                              <td><code className="sd-code">{lock.order_id?.slice(0,8)}…</code></td>
+                              <td>{lock.quantity}</td>
+                              <td className="sd-td-muted">{new Date(lock.locked_at).toLocaleTimeString()}</td>
+                              <td className="sd-td-muted">{new Date(lock.expires_at).toLocaleTimeString()}</td>
+                              <td>
+                                {secs > 0 ? (
+                                  <span className="sd-time-badge" style={{ color: urgent?"var(--uc-danger)":"var(--uc-acc)", borderColor: urgent?"rgba(245,101,101,.3)":"rgba(59,158,218,.3)", background: urgent?"rgba(245,101,101,.08)":"rgba(59,158,218,.08)" }}>
+                                    {Math.floor(secs/60)}m {secs%60}s
+                                  </span>
+                                ) : (
+                                  <span className="sd-time-badge" style={{color:"var(--uc-muted)"}}>Expiring…</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ TAB: Flagged Orders (FR24 FR25) ══ */}
+          {tab === "flagged" && (
+            <div>
+              <div className="sd-tab-hd">
+                <div>
+                  <span className="sd-tab-hd-title">Flagged Orders</span>
+                  <span className="sd-tab-hd-sub">FR24 FR25 — Pending admin review</span>
+                </div>
+                <button className="sd-ghost-btn" onClick={loadFlagged}><i className="bi bi-arrow-clockwise me-1" />Refresh</button>
+              </div>
+
+              {flagged.length === 0 ? (
+                <div className="sd-empty-card">
+                  <i className="bi bi-check-circle-fill" style={{fontSize:32, color:"var(--uc-acc2)"}} />
+                  <p>No pending flagged orders.</p>
+                </div>
+              ) : (
+                <div className="sd-flag-list">
+                  {flagged.map(f => (
+                    <FlaggedCard key={f.id} item={f} onReview={handleReview} loading={loading} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ TAB: Ledger (FR41 immutable audit) ══ */}
+          {tab === "ledger" && (
+            <div>
+              <div className="sd-tab-hd">
+                <div>
+                  <span className="sd-tab-hd-title">Stock Ledger</span>
+                  <span className="sd-tab-hd-sub">FR41 — Immutable transaction log</span>
+                </div>
+                <select
+                  className="sd-select"
+                  value={ledgerItem || ""}
+                  onChange={e => { const v = parseInt(e.target.value); setLedgerItem(v||null); if(v) loadLedger(v); }}
+                >
+                  <option value="">— Select item —</option>
+                  {items.map(i => <option key={i.menu_item_id} value={i.menu_item_id}>{i.item_name}</option>)}
+                </select>
+              </div>
+
+              {!ledgerItem ? (
+                <div className="sd-empty-card">
+                  <i className="bi bi-journal-text" style={{fontSize:32, color:"var(--uc-muted)"}} />
+                  <p>Select an item to view its ledger.</p>
+                </div>
+              ) : (
+                <div className="sd-table-card">
+                  <div className="sd-table-wrap">
+                    <table className="sd-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Delta</th>
+                          <th>Before</th>
+                          <th>After</th>
+                          <th>Order</th>
+                          <th>Note</th>
+                          <th>Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(ledger.transactions || []).map(txn => (
+                          <tr key={txn.id}>
+                            <td><TxnBadge type={txn.txn_type} /></td>
+                            <td className={txn.quantity_delta < 0 ? "sd-td-danger" : "sd-td-success"}>
+                              {txn.quantity_delta > 0 ? "+" : ""}{txn.quantity_delta}
+                            </td>
+                            <td className="sd-td-muted">{txn.quantity_before}</td>
+                            <td className="sd-td-name">{txn.quantity_after}</td>
+                            <td>{txn.order_id ? <code className="sd-code">{txn.order_id.slice(0,8)}…</code> : <span className="sd-td-muted">—</span>}</td>
+                            <td className="sd-td-note">{txn.note || <span className="sd-td-muted">—</span>}</td>
+                            <td className="sd-td-muted" style={{whiteSpace:"nowrap"}}>{new Date(txn.created_at).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="sd-table-footer">{ledger.total} total transaction{ledger.total !== 1 ? "s" : ""}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ TAB: Config (FR54 live reload ≤ 60s) ══ */}
+          {tab === "config" && (
+            <div>
+              <div className="sd-tab-hd">
+                <div>
+                  <span className="sd-tab-hd-title">System Configuration</span>
+                  <span className="sd-tab-hd-sub">FR54 — Live reload ≤ 60 sec · all changes audit-logged</span>
+                </div>
+                <button className="sd-ghost-btn" onClick={loadConfig}><i className="bi bi-arrow-clockwise me-1" />Refresh</button>
+              </div>
+
+              <div className="sd-info-banner">
+                <i className="bi bi-info-circle-fill" />
+                Changes take effect within 60 seconds without a system restart. All edits are immutably audit-logged.
+              </div>
+
+              <div className="sd-table-card">
+                <div className="sd-table-wrap">
+                  <table className="sd-table">
+                    <thead>
+                      <tr>
+                        <th>Parameter</th>
+                        <th>Description</th>
+                        <th>Value</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {config.map(c => (
+                        <tr key={c.key}>
+                          <td><code className="sd-code">{c.key}</code></td>
+                          <td className="sd-td-muted sd-td-note">{c.description}</td>
+                          <td>
+                            <input
+                              className="sd-inline-input"
+                              value={configEdit[c.key] !== undefined ? configEdit[c.key] : c.value}
+                              onChange={e => setConfigEdit(p => ({ ...p, [c.key]: e.target.value }))}
+                            />
+                          </td>
+                          <td>
+                            {configEdit[c.key] !== undefined && configEdit[c.key] !== c.value ? (
+                              <button className="sd-action-btn sd-action-btn--primary" style={{padding:"5px 12px",fontSize:12}} onClick={() => handleConfigSave(c.key)} disabled={loading}>
+                                Save
+                              </button>
+                            ) : <span className="sd-td-muted">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>{/* sd-body */}
+
+        {/* ══ RESTOCK MODAL ══ */}
+        {restockModal && (
+          <ConfirmModal
+            title={`Restock — ${restockModal.item_name}`}
+            confirmLabel="Restock"
+            onClose={() => setRestockModal(null)}
+            onConfirm={handleRestock}
+            loading={loading}
+          >
+            <div className="sd-modal-field">
+              <label className="sd-field-label">Quantity to add</label>
+              <input type="number" min="1" className="sd-input"
+                value={restockQty} onChange={e => setRestockQty(Math.max(1, parseInt(e.target.value)||1))} />
+              <span className="sd-field-hint">Current: {restockModal.total_qty} · Locked: {restockModal.locked_qty}</span>
+            </div>
+            <div className="sd-modal-field">
+              <label className="sd-field-label">Note <span className="sd-field-opt">(optional)</span></label>
+              <input type="text" className="sd-input" placeholder="e.g. Weekly delivery"
+                value={restockNote} onChange={e => setRestockNote(e.target.value)} />
+            </div>
+          </ConfirmModal>
+        )}
+
+        {/* ══ CORRECTION MODAL (FR41: mandatory reason) ══ */}
+        {correctModal && (
+          <ConfirmModal
+            title={`Correct Stock — ${correctModal.item_name}`}
+            confirmLabel="Apply Correction"
+            onClose={() => setCorrectModal(null)}
+            onConfirm={handleCorrection}
+            loading={loading}
+            disabled={correctNote.trim().length < 5}
+          >
+            <div className="sd-warn-banner">
+              <i className="bi bi-exclamation-triangle-fill" />
+              FR41: Corrections are permanently logged. A mandatory reason is required.
+            </div>
+            <div className="sd-modal-field">
+              <label className="sd-field-label">New exact quantity</label>
+              <input type="number" min="0" className="sd-input"
+                value={correctQty} onChange={e => setCorrectQty(Math.max(0, parseInt(e.target.value)||0))} />
+              <span className="sd-field-hint">
+                Current: {correctModal.total_qty} → Delta: {correctQty - correctModal.total_qty >= 0 ? "+" : ""}{correctQty - correctModal.total_qty}
               </span>
             </div>
-          </div>
+            <div className="sd-modal-field">
+              <label className="sd-field-label">Reason <span style={{color:"var(--uc-danger)"}}>*</span></label>
+              <textarea className={`sd-input sd-textarea ${correctNote.length > 0 && correctNote.trim().length < 5 ? "sd-input--err" : ""}`}
+                rows={2} placeholder="e.g. Physical count revealed discrepancy due to spoilage"
+                value={correctNote} onChange={e => setCorrectNote(e.target.value)} />
+              {correctNote.length > 0 && correctNote.trim().length < 5 && (
+                <span className="sd-field-err">Reason must be at least 5 characters.</span>
+              )}
+            </div>
+          </ConfirmModal>
         )}
 
-        <div className="pb-5" />
+        <Toast toasts={toasts} removeToast={removeToast} />
       </div>
-
-      {/* ── Restock Modal ───────────────────────────────────── */}
-      {restockModal && (
-        <Modal
-          title={`Restock — ${restockModal.item_name}`}
-          onClose={() => setRestockModal(null)}
-          onConfirm={handleRestock}
-          confirmLabel="Restock"
-          confirmVariant="primary"
-          loading={loading}
-        >
-          <div className="mb-3">
-            <label className="form-label fw-medium">Quantity to add</label>
-            <input
-              type="number" min="1" className="form-control"
-              value={restockQty}
-              onChange={e => setRestockQty(Math.max(1, parseInt(e.target.value) || 1))}
-            />
-            <div className="form-text">
-              Current stock: {restockModal.total_qty} | Locked: {restockModal.locked_qty}
-            </div>
-          </div>
-          <div className="mb-3">
-            <label className="form-label fw-medium">Note <span className="text-muted">(optional)</span></label>
-            <input
-              type="text" className="form-control" placeholder="e.g. Weekly delivery"
-              value={restockNote}
-              onChange={e => setRestockNote(e.target.value)}
-            />
-          </div>
-        </Modal>
-      )}
-
-      {/* ── Correction Modal ────────────────────────────────── */}
-      {correctModal && (
-        <Modal
-          title={`Correct Stock — ${correctModal.item_name}`}
-          onClose={() => setCorrectModal(null)}
-          onConfirm={handleCorrection}
-          confirmLabel="Apply Correction"
-          confirmVariant="warning"
-          loading={loading}
-          disableConfirm={correctNote.trim().length < 5}
-        >
-          <div className="alert alert-warning d-flex gap-2 align-items-center mb-3">
-            <i className="bi bi-exclamation-triangle-fill" />
-            <span style={{ fontSize: ".88rem" }}>
-              FR41: Stock correction is logged permanently. Provide a mandatory reason.
-            </span>
-          </div>
-          <div className="mb-3">
-            <label className="form-label fw-medium">New exact quantity</label>
-            <input
-              type="number" min="0" className="form-control"
-              value={correctQty}
-              onChange={e => setCorrectQty(Math.max(0, parseInt(e.target.value) || 0))}
-            />
-            <div className="form-text">
-              Current: {correctModal.total_qty} → Delta: {correctQty - correctModal.total_qty >= 0 ? "+" : ""}{correctQty - correctModal.total_qty}
-            </div>
-          </div>
-          <div className="mb-3">
-            <label className="form-label fw-medium">
-              Reason <span className="text-danger">*</span>
-            </label>
-            <textarea
-              className={`form-control ${correctNote.trim().length > 0 && correctNote.trim().length < 5 ? "is-invalid" : ""}`}
-              rows={2}
-              placeholder="e.g. Physical count revealed discrepancy due to spoilage"
-              value={correctNote}
-              onChange={e => setCorrectNote(e.target.value)}
-            />
-            {correctNote.trim().length < 5 && correctNote.length > 0 && (
-              <div className="invalid-feedback">Reason must be at least 5 characters.</div>
-            )}
-          </div>
-        </Modal>
-      )}
-
-      <Toast toasts={toasts} dismiss={dismissToast} />
     </>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Flagged Order Card
-// ─────────────────────────────────────────────────────────────
-function FlaggedOrderCard({ item, onReview, loading }) {
+// ── Flagged order card ─────────────────────────────────────────
+// TDP-M4-01: staff cancel requires reason_code (P3)
+// TDP-M4-01 P4: distinct error messages per rejection type
+function FlaggedCard({ item, onReview, loading }) {
   const [rejectReason, setRejectReason] = useState("");
   const [showReject,   setShowReject]   = useState(false);
   const timeLeft = Math.max(0, Math.ceil((new Date(item.auto_cancel_at) - Date.now()) / 60000));
+  const urgent   = timeLeft < 15;
 
   return (
-    <div className="uc-card p-3">
-      <div className="d-flex align-items-start justify-content-between mb-2">
-        <div>
-          <span className="badge uc-badge-flagged me-2">
-            <i className="bi bi-flag-fill me-1" />Flagged
+    <div className="sd-flag-card">
+      <div className="sd-flag-hd">
+        <div className="sd-flag-meta">
+          <span className="sd-flag-chip">
+            <i className="bi bi-flag-fill" /> Flagged
           </span>
-          <code style={{ fontSize: ".78rem" }}>{item.order_id?.slice(0, 8)}…</code>
+          <code className="sd-code">{item.order_id?.slice(0,8)}…</code>
         </div>
-        <div className="text-end">
-          <div style={{ fontSize: ".78rem", color: "#9ca3af" }}>
-            Auto-cancels in
-          </div>
-          <span className={`badge ${timeLeft < 15 ? "bg-danger" : "bg-warning text-dark"}`}>
-            {timeLeft}m
-          </span>
+        <div className="sd-flag-timer">
+          <span className="sd-td-muted" style={{fontSize:11}}>Auto-cancels in</span>
+          <span className="sd-time-badge" style={{
+            color: urgent ? "var(--uc-danger)" : "var(--uc-warn)",
+            borderColor: urgent ? "rgba(245,101,101,.3)" : "rgba(246,173,85,.3)",
+            background: urgent ? "rgba(245,101,101,.08)" : "rgba(246,173,85,.08)",
+          }}>{timeLeft}m</span>
         </div>
       </div>
 
-      <div className="mb-2" style={{ fontSize: ".88rem" }}>
-        <strong>Reason:</strong> {item.flagged_reason}
-      </div>
+      <p className="sd-flag-reason"><strong>Reason:</strong> {item.flagged_reason}</p>
 
       {item.flag_details && (
-        <div className="d-flex gap-2 mb-2 flex-wrap">
+        <div className="sd-flag-tags">
           {item.flag_details.max_qty_exceeded && (
-            <span className="badge bg-light text-dark border">
-              <i className="bi bi-cart-x me-1" />Qty threshold exceeded
-            </span>
+            <span className="sd-tag"><i className="bi bi-cart-x me-1" />Qty threshold exceeded</span>
           )}
           {item.flag_details.total_exceeded && (
-            <span className="badge bg-light text-dark border">
-              <i className="bi bi-cash-coin me-1" />Total threshold exceeded
-            </span>
+            <span className="sd-tag"><i className="bi bi-cash-coin me-1" />Total threshold exceeded</span>
           )}
         </div>
       )}
 
       {showReject && (
-        <div className="mb-2">
-          <input
-            className="form-control form-control-sm"
-            placeholder="Rejection reason (required)"
-            value={rejectReason}
-            onChange={e => setRejectReason(e.target.value)}
-          />
+        <div className="sd-modal-field" style={{marginBottom:10}}>
+          <input className="sd-input" placeholder="Rejection reason (required)"
+            value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
         </div>
       )}
 
-      <div className="d-flex gap-2">
-        <button
-          className="btn btn-sm btn-success"
-          disabled={loading}
-          onClick={() => onReview(item.id, "approve", null)}
-        >
-          <i className="bi bi-check-lg me-1" />Approve
+      <div className="sd-flag-actions">
+        <button className="sd-action-btn sd-action-btn--success" disabled={loading}
+          onClick={() => onReview(item.id, "approve", null)}>
+          <i className="bi bi-check-lg" /> Approve
         </button>
         {!showReject ? (
-          <button
-            className="btn btn-sm btn-outline-danger"
-            onClick={() => setShowReject(true)}
-          >
-            <i className="bi bi-x-lg me-1" />Reject
+          <button className="sd-action-btn sd-action-btn--danger" onClick={() => setShowReject(true)}>
+            <i className="bi bi-x-lg" /> Reject
           </button>
         ) : (
           <>
-            <button
-              className="btn btn-sm btn-danger"
+            {/* TDP-M4-01 P3: reason mandatory for staff actions */}
+            <button className="sd-action-btn sd-action-btn--danger"
               disabled={loading || !rejectReason.trim()}
-              onClick={() => onReview(item.id, "reject", rejectReason)}
-            >
+              onClick={() => onReview(item.id, "reject", rejectReason)}>
               Confirm Reject
             </button>
-            <button
-              className="btn btn-sm btn-outline-secondary"
-              onClick={() => { setShowReject(false); setRejectReason(""); }}
-            >
+            <button className="sd-ghost-btn" onClick={() => { setShowReject(false); setRejectReason(""); }}>
               Cancel
             </button>
           </>
@@ -950,64 +802,225 @@ function FlaggedOrderCard({ item, onReview, loading }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Transaction type badge
-// ─────────────────────────────────────────────────────────────
-function TxnTypeBadge({ type }) {
-  const map = {
-    RESERVE:    { cls: "bg-info text-dark",    icon: "lock"         },
-    DEDUCT:     { cls: "bg-danger",             icon: "dash-circle"  },
-    RELEASE:    { cls: "bg-success",            icon: "unlock"       },
-    RESTOCK:    { cls: "bg-primary",            icon: "plus-circle"  },
-    CORRECTION: { cls: "bg-warning text-dark",  icon: "pencil"       },
-    ADMIN_DEDUCT: { cls: "bg-secondary",        icon: "trash"        },
-  };
-  const m = map[type] || { cls: "bg-light text-dark", icon: "question" };
-  return (
-    <span className={`badge ${m.cls}`}>
-      <i className={`bi bi-${m.icon} me-1`} />{type}
-    </span>
-  );
-}
+// ════════════════════════════════════════════════════════════
+// CSS — same design tokens as Login.jsx
+// ════════════════════════════════════════════════════════════
+const SD_CSS = `
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  :root {
+    --uc-bg:#080d14; --uc-card:#111825;
+    --uc-brd:rgba(255,255,255,0.07); --uc-brd-hi:rgba(99,179,237,0.4);
+    --uc-acc:#3b9eda; --uc-acc2:#22c993; --uc-gold:#f6c90e;
+    --uc-text:#e8edf5; --uc-muted:#6b7a90;
+    --uc-danger:#f56565; --uc-warn:#f6ad55;
+    --uc-inp:rgba(255,255,255,0.035);
+    --uc-r:14px; --uc-rs:9px;
+    --fd:'Sora',sans-serif; --fb:'DM Sans',sans-serif;
+  }
+  .sd-page { min-height:100vh; background:var(--uc-bg); color:var(--uc-text); font-family:var(--fb); position:relative; }
+  .uc-mesh { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  .uc-mesh::before {
+    content:''; position:absolute; inset:-40%;
+    background:
+      radial-gradient(ellipse 60% 50% at 10% 20%,rgba(59,158,218,.09) 0%,transparent 60%),
+      radial-gradient(ellipse 50% 40% at 90% 80%,rgba(34,201,147,.07) 0%,transparent 55%);
+    animation:meshMove 18s ease-in-out infinite alternate;
+  }
+  @keyframes meshMove{from{transform:translate(0,0)}to{transform:translate(2%,1.5%)}}
+  .uc-grid { position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image:linear-gradient(rgba(255,255,255,.013) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,255,255,.013) 1px,transparent 1px);
+    background-size:52px 52px; }
 
-// ─────────────────────────────────────────────────────────────
-// Generic modal
-// ─────────────────────────────────────────────────────────────
-function Modal({ title, onClose, onConfirm, confirmLabel, confirmVariant, loading, disableConfirm, children }) {
-  return (
-    <div
-      style={{
-        position: "fixed", inset: 0, zIndex: 1050,
-        background: "rgba(0,0,0,.4)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: "1rem",
-      }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        className="uc-card"
-        style={{ width: "100%", maxWidth: 460, padding: "1.5rem" }}
-      >
-        <div className="d-flex align-items-center justify-content-between mb-3">
-          <h6 className="mb-0 fw-bold">{title}</h6>
-          <button className="btn-close" onClick={onClose} />
-        </div>
-        {children}
-        <div className="d-flex gap-2 justify-content-end mt-3">
-          <button className="btn btn-outline-secondary" onClick={onClose} disabled={loading}>
-            Cancel
-          </button>
-          <button
-            className={`btn btn-${confirmVariant}`}
-            onClick={onConfirm}
-            disabled={loading || disableConfirm}
-          >
-            {loading ? (
-              <><span className="spinner-border spinner-border-sm me-2" />{confirmLabel}…</>
-            ) : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+  /* Nav */
+  .mp-nav { position:sticky; top:0; z-index:200; display:flex; align-items:center; justify-content:space-between;
+    padding:0 clamp(16px,3vw,32px); height:60px;
+    background:rgba(8,13,20,.9); backdrop-filter:blur(16px); border-bottom:1px solid var(--uc-brd); }
+  .mp-nav-brand { display:flex; align-items:center; gap:10px; }
+  .mp-nav-logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,var(--uc-acc),var(--uc-acc2));
+    display:flex; align-items:center; justify-content:center; font-size:16px; }
+  .mp-nav-name { font-family:var(--fd); font-size:16px; font-weight:700; letter-spacing:-.02em; }
+  .sd-role-tag { font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    background:rgba(167,139,250,.12); color:#a78bfa; border:1px solid rgba(167,139,250,.25); border-radius:100px; padding:3px 9px; }
+  .mp-nav-actions { display:flex; align-items:center; gap:8px; }
+  .mp-logout-btn { width:36px; height:36px; display:flex; align-items:center; justify-content:center;
+    background:none; border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-muted); cursor:pointer; font-size:15px; transition:all .2s; }
+  .mp-logout-btn:hover { border-color:var(--uc-danger); color:var(--uc-danger); }
+
+  /* Body */
+  .sd-body { position:relative; z-index:1; padding:clamp(16px,3vw,28px); display:flex; flex-direction:column; gap:18px; max-width:1400px; }
+
+  /* Stats */
+  .sd-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .sd-stat { display:flex; align-items:center; gap:12px; background:var(--uc-card); border:1px solid var(--uc-brd);
+    border-radius:var(--uc-r); padding:16px; transition:border-color .25s; }
+  .sd-stat:hover { border-color:var(--uc-brd-hi); }
+  .sd-stat-val { font-family:var(--fd); font-size:22px; font-weight:700; line-height:1; }
+  .sd-stat-label { font-size:11px; color:var(--uc-muted); margin-top:2px; }
+  .sd-stat-sub { font-size:10px; color:var(--uc-muted); opacity:.7; margin-top:1px; }
+
+  /* Tabs */
+  .sd-tabs { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--uc-brd); }
+  .sd-tab { display:flex; align-items:center; gap:6px; background:none; border:none; border-bottom:2px solid transparent;
+    color:var(--uc-muted); font-family:var(--fb); font-size:12.5px; font-weight:600;
+    padding:10px 14px; cursor:pointer; transition:all .2s; white-space:nowrap; }
+  .sd-tab:hover { color:var(--uc-text); }
+  .sd-tab--active { color:var(--uc-acc); border-bottom-color:var(--uc-acc); }
+  .sd-tab-badge { background:var(--uc-danger); color:#fff; font-size:10px; font-weight:700;
+    padding:1px 6px; border-radius:100px; }
+
+  /* Tab header */
+  .sd-tab-hd { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+  .sd-tab-hd-title { font-family:var(--fd); font-size:15px; font-weight:700; margin-right:8px; }
+  .sd-tab-hd-sub { font-size:12px; color:var(--uc-muted); }
+  .sd-tab-hd-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+  /* Search */
+  .sd-search-wrap { position:relative; margin-bottom:16px; max-width:340px; }
+  .sd-search-ico { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--uc-muted); font-size:13px; pointer-events:none; }
+  .sd-search { width:100%; background:var(--uc-inp); border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-text); font-family:var(--fb); font-size:13.5px; padding:9px 12px 9px 34px;
+    outline:none; transition:border-color .2s,box-shadow .2s; }
+  .sd-search:focus { border-color:var(--uc-acc); box-shadow:0 0 0 3px rgba(59,158,218,.12); }
+
+  /* Item grid */
+  .sd-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+  .sd-card { background:var(--uc-card); border:1px solid var(--uc-brd); border-radius:var(--uc-r);
+    padding:18px; display:flex; flex-direction:column; gap:12px; transition:border-color .25s,transform .2s; }
+  .sd-card:hover { border-color:var(--uc-brd-hi); transform:translateY(-2px); }
+  .sd-card-hd { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+  .sd-item-name { font-family:var(--fd); font-size:14px; font-weight:700; margin-bottom:3px; }
+  .sd-item-sub { font-size:11px; color:var(--uc-muted); }
+  .sd-status-badge { font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:100px; border:1px solid; white-space:nowrap; flex-shrink:0; }
+
+  /* Stock bar */
+  .sd-bar-track { height:6px; border-radius:99px; background:var(--uc-brd); overflow:hidden; position:relative; }
+  .sd-bar-fill { height:100%; border-radius:99px; transition:width .4s ease; }
+  .sd-bar-locked { height:100%; border-radius:99px; background:rgba(59,158,218,.35); position:absolute; top:0; right:0; }
+  .sd-bar-labels { display:flex; justify-content:space-between; align-items:center; margin-top:5px; font-size:11px; color:var(--uc-muted); }
+  .sd-lock-chip { display:inline-flex; align-items:center; gap:3px; font-size:10px; font-weight:700;
+    padding:2px 7px; border-radius:100px; background:rgba(59,158,218,.1); color:var(--uc-acc); border:1px solid rgba(59,158,218,.25); }
+
+  /* Card actions */
+  .sd-card-actions { display:flex; gap:8px; }
+
+  /* Buttons */
+  .sd-action-btn { display:inline-flex; align-items:center; gap:6px; border:none; border-radius:var(--uc-rs);
+    font-family:var(--fb); font-size:12.5px; font-weight:600; padding:8px 14px;
+    cursor:pointer; transition:opacity .2s,transform .15s; }
+  .sd-action-btn:hover:not(:disabled) { opacity:.88; transform:translateY(-1px); }
+  .sd-action-btn:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+  .sd-action-btn--primary { background:linear-gradient(135deg,var(--uc-acc),#2878be); color:#fff; box-shadow:0 3px 12px rgba(59,158,218,.25); }
+  .sd-action-btn--warn    { background:rgba(246,173,85,.12); color:var(--uc-warn); border:1px solid rgba(246,173,85,.3); }
+  .sd-action-btn--danger  { background:rgba(245,101,101,.12); color:var(--uc-danger); border:1px solid rgba(245,101,101,.3); }
+  .sd-action-btn--success { background:rgba(34,201,147,.12); color:var(--uc-acc2); border:1px solid rgba(34,201,147,.3); }
+  .sd-ghost-btn { display:inline-flex; align-items:center; gap:4px; background:var(--uc-inp); border:1px solid var(--uc-brd);
+    border-radius:var(--uc-rs); color:var(--uc-muted); font-family:var(--fb); font-size:12.5px;
+    padding:7px 13px; cursor:pointer; transition:all .2s; }
+  .sd-ghost-btn:hover { border-color:var(--uc-acc); color:var(--uc-text); }
+  .sd-icon-btn { width:32px; height:32px; display:flex; align-items:center; justify-content:center;
+    background:var(--uc-inp); border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-muted); cursor:pointer; font-size:14px; transition:all .2s; }
+  .sd-icon-btn:hover { border-color:var(--uc-acc); color:var(--uc-acc); }
+
+  /* Table */
+  .sd-table-card { background:var(--uc-card); border:1px solid var(--uc-brd); border-radius:var(--uc-r); overflow:hidden; }
+  .sd-table-wrap { overflow-x:auto; }
+  .sd-table { width:100%; border-collapse:collapse; }
+  .sd-table th { background:rgba(255,255,255,.025); padding:10px 14px; font-size:10.5px; font-weight:700;
+    letter-spacing:.07em; text-transform:uppercase; color:var(--uc-muted); text-align:left;
+    white-space:nowrap; border-bottom:1px solid var(--uc-brd); }
+  .sd-table td { padding:11px 14px; border-bottom:1px solid rgba(255,255,255,.04); font-size:13px; vertical-align:middle; }
+  .sd-table tr:last-child td { border-bottom:none; }
+  .sd-table tr:hover td { background:rgba(255,255,255,.018); }
+  .sd-table-footer { padding:10px 14px; font-size:11.5px; color:var(--uc-muted); border-top:1px solid var(--uc-brd); }
+  .sd-td-name   { font-weight:600; }
+  .sd-td-muted  { color:var(--uc-muted); }
+  .sd-td-danger { color:var(--uc-danger); font-weight:700; }
+  .sd-td-success{ color:var(--uc-acc2);  font-weight:700; }
+  .sd-td-note   { max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sd-code      { font-size:11px; font-family:monospace; background:rgba(255,255,255,.05); padding:2px 6px; border-radius:4px; color:var(--uc-muted); }
+  .sd-time-badge { display:inline-flex; align-items:center; font-size:11px; font-weight:700;
+    padding:3px 9px; border-radius:100px; border:1px solid; }
+  .sd-txn-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700;
+    padding:3px 9px; border-radius:100px; border:1px solid; white-space:nowrap; }
+
+  /* Flagged */
+  .sd-flag-list { display:flex; flex-direction:column; gap:12px; }
+  .sd-flag-card { background:var(--uc-card); border:1px solid rgba(246,201,14,.2); border-radius:var(--uc-r); padding:18px; }
+  .sd-flag-hd { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .sd-flag-meta { display:flex; align-items:center; gap:10px; }
+  .sd-flag-chip { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700;
+    padding:3px 10px; border-radius:100px; background:rgba(246,201,14,.1); color:var(--uc-gold); border:1px solid rgba(246,201,14,.25); }
+  .sd-flag-timer { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+  .sd-flag-reason { font-size:13px; color:var(--uc-muted); margin-bottom:10px; }
+  .sd-flag-tags { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .sd-tag { font-size:11px; padding:3px 10px; border-radius:100px; background:var(--uc-inp); border:1px solid var(--uc-brd); color:var(--uc-muted); }
+  .sd-flag-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+  /* Empty / Info */
+  .sd-empty { display:flex; flex-direction:column; align-items:center; gap:12px; padding:70px 20px; color:var(--uc-muted); text-align:center; }
+  .sd-empty-card { display:flex; flex-direction:column; align-items:center; gap:12px; padding:60px 20px;
+    background:var(--uc-card); border:1px solid var(--uc-brd); border-radius:var(--uc-r); color:var(--uc-muted); text-align:center; }
+  .sd-info-banner { display:flex; align-items:center; gap:10px; background:rgba(59,158,218,.07);
+    border:1px solid rgba(59,158,218,.2); border-radius:var(--uc-rs); padding:12px 16px;
+    font-size:13px; color:var(--uc-acc); margin-bottom:14px; }
+  .sd-warn-banner { display:flex; align-items:flex-start; gap:10px; background:rgba(246,173,85,.08);
+    border:1px solid rgba(246,173,85,.25); border-radius:var(--uc-rs); padding:12px;
+    font-size:12.5px; color:var(--uc-warn); margin-bottom:14px; line-height:1.5; }
+
+  /* Select */
+  .sd-select { background:var(--uc-inp); border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-text); font-family:var(--fb); font-size:13px; padding:8px 12px;
+    outline:none; cursor:pointer; min-width:200px; }
+  .sd-select:focus { border-color:var(--uc-acc); }
+
+  /* Modal */
+  .sd-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); z-index:500; }
+  .sd-modal-wrap { position:fixed; inset:0; z-index:501; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .sd-modal { background:var(--uc-card); border:1px solid var(--uc-brd-hi); border-radius:var(--uc-r);
+    padding:24px; width:100%; max-width:440px; box-shadow:0 24px 48px rgba(0,0,0,.6);
+    animation:fadeUp .25s ease both; display:flex; flex-direction:column; gap:16px; }
+  @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  .sd-modal-hd { display:flex; justify-content:space-between; align-items:center; }
+  .sd-modal-title { font-family:var(--fd); font-size:16px; font-weight:700; }
+  .sd-modal-msg { font-size:13.5px; color:var(--uc-muted); line-height:1.5; }
+  .sd-modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+  .sd-modal-field { display:flex; flex-direction:column; gap:5px; }
+
+  /* Form inputs */
+  .sd-input { background:var(--uc-inp); border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-text); font-family:var(--fb); font-size:13.5px; padding:10px 12px;
+    outline:none; transition:border-color .2s,box-shadow .2s; width:100%; }
+  .sd-input:focus { border-color:var(--uc-acc); box-shadow:0 0 0 3px rgba(59,158,218,.12); }
+  .sd-input--err { border-color:var(--uc-danger) !important; }
+  .sd-textarea { resize:vertical; min-height:72px; }
+  .sd-inline-input { background:var(--uc-inp); border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
+    color:var(--uc-text); font-family:var(--fb); font-size:13px; padding:7px 10px;
+    outline:none; transition:border-color .2s; width:100%; }
+  .sd-inline-input:focus { border-color:var(--uc-acc); }
+  .sd-field-label { font-size:11px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; color:var(--uc-muted); }
+  .sd-field-opt   { font-size:10px; letter-spacing:0; text-transform:none; opacity:.7; }
+  .sd-field-hint  { font-size:11px; color:var(--uc-muted); }
+  .sd-field-err   { font-size:11px; color:var(--uc-danger); }
+
+  /* Spinners */
+  .sd-spinner-sm { display:inline-block; width:14px; height:14px; border:2px solid rgba(255,255,255,.3);
+    border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* Toast */
+  .sd-toast { display:flex; align-items:center; gap:10px; padding:11px 16px; border-radius:var(--uc-rs);
+    font-size:13px; font-weight:500; min-width:260px; max-width:380px;
+    box-shadow:0 8px 24px rgba(0,0,0,.4); animation:fadeUp .3s ease both; }
+  .sd-toast--success { background:#0e2e20; border:1px solid rgba(34,201,147,.3); color:var(--uc-acc2); }
+  .sd-toast--warn    { background:#2b1f0a; border:1px solid rgba(246,173,85,.3);  color:var(--uc-warn); }
+  .sd-toast--error   { background:#2b0e0e; border:1px solid rgba(245,101,101,.3); color:var(--uc-danger); }
+  .sd-toast-close    { margin-left:auto; background:none; border:none; cursor:pointer; color:inherit; opacity:.7; font-size:16px; padding:0; }
+
+  @media(max-width:640px) {
+    .sd-stats { grid-template-columns:1fr 1fr; }
+    .sd-grid  { grid-template-columns:1fr; }
+  }
+`;

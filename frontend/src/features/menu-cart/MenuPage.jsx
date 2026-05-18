@@ -274,7 +274,7 @@ export default function MenuPage() {
         <div className="uc-mesh"  aria-hidden="true" />
         <div className="uc-grid"  aria-hidden="true" />
 
-        {/* ── SINGLE Navbar ── */}
+{/* ── SINGLE Navbar ── */}
         <nav className="mp-nav">
           {/* Brand */}
           <div className="mp-nav-brand">
@@ -282,14 +282,20 @@ export default function MenuPage() {
             <span className="mp-nav-name">CampusBite</span>
           </div>
 
-          {/* Centre: tab switcher — admin sees both tabs, student sees none */}
+          {/* Centre: tab switcher — admin sees menu, admin, and stock tabs */}
           {isAdmin && (
             <div className="mp-nav-tabs">
               <button className="mp-nav-tab mp-nav-tab--active">
                 <i className="bi bi-storefront" /> Menu
               </button>
+              
               <button className="mp-nav-tab" onClick={() => navigate("/admin")}>
                 <i className="bi bi-gear-fill" /> Admin
+              </button>
+              
+              {/* 💡 YOUR NEW STOCK BUTTON */}
+              <button className="mp-nav-tab" onClick={() => navigate("/stock")}>
+                <i className="bi bi-boxes" /> Stock
               </button>
             </div>
           )}
@@ -856,8 +862,8 @@ const MENU_CSS = `
     .mp-layout--cart-open .mp-cart { display:block; }
     .mp-layout:not(.mp-layout--cart-open) .mp-cart { display:none; }
   }
-.mp-overlay { position:fixed; inset:0; z-index:299; background:rgba(0,0,0,.4); }
-@media(min-width:1024px) { .mp-overlay { display:none; } }
+  .mp-overlay { position:fixed; inset:0; z-index:299; background:rgba(0,0,0,.5); backdrop-filter:blur(2px); }
+  @media(min-width:1024px) { .mp-overlay { display:none; } }
   .mp-cart-inner { height:100%; overflow-y:auto; display:flex; flex-direction:column; background:var(--uc-card); border-left:1px solid var(--uc-brd); padding:20px; }
 
   .mp-cart-hd { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; }

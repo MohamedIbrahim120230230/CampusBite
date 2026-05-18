@@ -25,7 +25,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-
+from fastapi.encoders import jsonable_encoder
 import asyncpg
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -62,8 +62,8 @@ async def get_pool() -> asyncpg.Pool:
 # Response envelope
 # ─────────────────────────────────────────────────────────────
 
-def ok(data, status: int = 200) -> JSONResponse:
-    return JSONResponse({"success": True, "data": data}, status_code=status)
+def ok(data, status=200):
+    return JSONResponse({"success": True, "data": jsonable_encoder(data)}, status_code=status)
 
 
 def err(code: str, message: str, details=None, status: int = 400) -> JSONResponse:
@@ -726,13 +726,15 @@ async def expire_stale_locks(request: Request):
         expired_locks = await conn.fetchval("SELECT expire_stale_locks()")
 
         # FR56: auto-cancel flagged orders past deadline
-        auto_cancelled = await conn.fetchval(
+        # FIX: Fetch IDs and let Python count them, avoiding PostgreSQL's restriction
+        cancelled_rows = await conn.fetch(
             """UPDATE flagged_orders
                SET    status = 'AUTO_CANCELLED'
                WHERE  status = 'PENDING'
                  AND  auto_cancel_at <= NOW()
-               RETURNING COUNT(*)"""
+               RETURNING id"""
         )
+        auto_cancelled = len(cancelled_rows)
 
     await _audit(
         "STALE_LOCKS_EXPIRED", payload["user_id"], None,
