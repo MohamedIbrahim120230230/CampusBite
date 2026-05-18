@@ -1,20 +1,22 @@
 // ============================================================
 // frontend/src/App.jsx
-// Root router — wires all four feature areas:
+// Root router — wires all five feature areas:
 //   /            → Login
-//   /menu        → MenuPage        (student / admin)
-//   /admin       → AdminPanel      (admin only)
-//   /order       → OrderPaymentApp (student / admin)
-//   /stock       → StockDashboard  (admin only)
+//   /menu        → MenuPage          (student / staff / admin)
+//   /admin       → AdminPanel        (admin only)
+//   /order       → OrderPaymentApp   (student / staff / admin)
+//   /stock       → StockDashboard    (staff / admin)
+//   /lifecycle   → LifecycleDashboard (staff / admin)
 // ============================================================
 
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 
-import { Login }          from "./features/auth/auth_components";
-import MenuPage           from "./features/menu-cart/MenuPage";
-import AdminPanel         from "./features/menu-cart/AdminPanel";
-import OrderPaymentApp    from "./features/order/OrderPaymentApp";
-import StockDashboard     from "./features/stock/StockDashboard";
+import { Login }              from "./features/auth/auth_components";
+import MenuPage               from "./features/menu-cart/MenuPage";
+import AdminPanel             from "./features/menu-cart/AdminPanel";
+import OrderPaymentApp        from "./features/order/OrderPaymentApp";
+import StockDashboard         from "./features/stock/StockDashboard";
+import LifecycleDashboard from "./features/lifecycle/lifecycle_dashboard";
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -50,6 +52,20 @@ function LoginPage() {
   );
 }
 
+// ── LifecyclePage — injects auth context into the dashboard ───
+//
+// Reads role + id from the stored user object so the dashboard
+// doesn't need its own role-switcher.
+function LifecyclePage() {
+  const user = getUser();
+  return (
+    <LifecycleDashboard
+      role={user?.role ?? "staff"}
+      actorId={user?.id ?? `${user?.role ?? "staff"}-demo`}
+    />
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────
 export default function App() {
   return (
@@ -59,7 +75,7 @@ export default function App() {
         {/* ── Public ── */}
         <Route path="/" element={<LoginPage />} />
 
-        {/* ── Student + Admin ── */}
+        {/* ── Student + Staff + Admin ── */}
         <Route
           path="/menu"
           element={
@@ -88,11 +104,21 @@ export default function App() {
           }
         />
 
+        {/* ── Staff + Admin ── */}
         <Route
           path="/stock"
           element={
             <RequireRole allowed={["admin", "staff"]}>
               <StockDashboard />
+            </RequireRole>
+          }
+        />
+
+        <Route
+          path="/lifecycle"
+          element={
+            <RequireRole allowed={["admin", "staff"]}>
+              <LifecyclePage />
             </RequireRole>
           }
         />
