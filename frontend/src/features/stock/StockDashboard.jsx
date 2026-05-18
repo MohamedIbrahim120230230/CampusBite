@@ -41,6 +41,12 @@ async function apiFetch(path, options = {}) {
   let json;
   try { json = JSON.parse(text); }
   catch { throw { code: "INVALID_JSON", message: "Unexpected server response." }; }
+  if (res.status === 401) {
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("user");
+    window.location.href = "/";
+    return;
+  }
   if (!res.ok) throw json.error ?? { code: "HTTP_ERROR", message: `HTTP ${res.status}` };
   return json.data;
 }
@@ -184,6 +190,7 @@ export default function StockDashboard() {
   const [correctQty,   setCorrectQty]   = useState(0);
   const [correctNote,  setCorrectNote]  = useState("");
   const [configEdit,   setConfigEdit]   = useState({});
+  const [releaseModal, setReleaseModal] = useState(null);
 
   // ── Loaders ───────────────────────────────────────────────
   const loadItems = useCallback(async () => {
@@ -297,6 +304,20 @@ export default function StockDashboard() {
       );
       loadLocks();
     } catch (e) { addToast(e.message || "Expire job failed.", "error"); }
+    finally { setLoading(false); }
+  };
+  
+// ── Release single lock ────────────────────────────────────
+  const handleReleaseLock = async () => {
+    if (!releaseModal) return;
+    setLoading(true);
+    try {
+      await apiFetch(`/locks/${releaseModal.id}/release`, { method: "DELETE" });
+      addToast(`Lock released — ${releaseModal.quantity} unit(s) of "${releaseModal.item_name}" freed.`, "success");
+      setReleaseModal(null);
+      loadLocks();
+      loadItems();
+    } catch (e) { addToast(e.message || "Release failed.", "error"); }
     finally { setLoading(false); }
   };
 
@@ -487,6 +508,7 @@ export default function StockDashboard() {
                           <th>Locked At</th>
                           <th>Expires</th>
                           <th>Remaining</th>
+                          <th>Action</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -508,6 +530,16 @@ export default function StockDashboard() {
                                 ) : (
                                   <span className="sd-time-badge" style={{color:"var(--uc-muted)"}}>Expiring…</span>
                                 )}
+                              </td>
+                              <td>
+                                <button
+                                  className="sd-action-btn sd-action-btn--danger"
+                                  style={{padding:"5px 12px", fontSize:12}}
+                                  onClick={() => setReleaseModal(lock)}
+                                  disabled={loading}
+                                >
+                                  <i className="bi bi-unlock-fill" /> Release
+                                </button>
                               </td>
                             </tr>
                           );
@@ -669,7 +701,7 @@ export default function StockDashboard() {
           <ConfirmModal
             title={`Restock — ${restockModal.item_name}`}
             confirmLabel="Restock"
-            onClose={() => setRestockModal(null)}
+            onCancel={() => { setRestockModal(null); setRestockQty(1); setRestockNote(""); }}
             onConfirm={handleRestock}
             loading={loading}
           >
@@ -692,7 +724,7 @@ export default function StockDashboard() {
           <ConfirmModal
             title={`Correct Stock — ${correctModal.item_name}`}
             confirmLabel="Apply Correction"
-            onClose={() => setCorrectModal(null)}
+            onCancel={() => { setCorrectModal(null); setCorrectQty(0); setCorrectNote(""); }}
             onConfirm={handleCorrection}
             loading={loading}
             disabled={correctNote.trim().length < 5}
@@ -722,6 +754,19 @@ export default function StockDashboard() {
         )}
 
         <Toast toasts={toasts} removeToast={removeToast} />
+
+        {/* ══ RELEASE LOCK MODAL ══ */}
+        {releaseModal && (
+          <ConfirmModal
+            title="Release Stock Lock"
+            message={`Are you sure you want to immediately release the lock on ${releaseModal.quantity} unit(s) of "${releaseModal.item_name}"? This will cancel the associated order and free the stock.`}
+            confirmLabel="Release Lock"
+            danger
+            onCancel={() => setReleaseModal(null)}
+            onConfirm={handleReleaseLock}
+            loading={loading}
+          />
+        )}
       </div>
     </>
   );
@@ -975,6 +1020,7 @@ const SD_CSS = `
     color:var(--uc-text); font-family:var(--fb); font-size:13px; padding:8px 12px;
     outline:none; cursor:pointer; min-width:200px; }
   .sd-select:focus { border-color:var(--uc-acc); }
+  .sd-select option { background:#1e2433; color:#e2e8f0; padding:8px; }
 
   /* Modal */
   .sd-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); z-index:500; }
