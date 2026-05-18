@@ -703,6 +703,54 @@ async def get_active_locks(request: Request):
         )
     return ok({"active_locks": [dict(r) for r in rows], "count": len(rows)})
 
+# ══════════════════════════════════════════════════════════════
+# DELETE /api/v1/stock/locks/{lock_id}/release
+# Admin: manually release a single active lock before TTL expires
+# ══════════════════════════════════════════════════════════════
+
+@router.delete("/locks/{lock_id}/release")
+async def release_single_lock(lock_id: str, request: Request):
+    payload, guard = await _require_role(request, "admin", "staff")
+    if guard:
+        return guard
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            lock = await conn.fetchrow(
+                """SELECT sl.id, sl.menu_item_id, sl.quantity, sl.order_id::text,
+                          m.name AS item_name
+                   FROM   stock_locks sl
+                   JOIN   menu_items m ON m.id = sl.menu_item_id
+                   WHERE  sl.id = $1
+                     AND  sl.released_at IS NULL""",
+                uuid.UUID(lock_id),
+            )
+            if not lock:
+                return err("LOCK_NOT_FOUND", "Lock not found or already released.", status=404)
+
+            await conn.execute(
+                "UPDATE stock_locks SET released_at = NOW() WHERE id = $1",
+                uuid.UUID(lock_id),
+            )
+            await conn.execute(
+                """UPDATE menu_items
+                   SET stock_qty = stock_qty + $1
+                   WHERE id = $2""",
+                lock["quantity"], lock["menu_item_id"],
+            )
+            await _audit(
+                "LOCK_MANUALLY_RELEASED", payload["user_id"], lock["menu_item_id"],
+                request.client.host if request.client else None,
+                {"lock_id": lock_id, "order_id": lock["order_id"], "quantity": lock["quantity"]},
+            )
+
+    return ok({
+        "lock_id":   lock_id,
+        "item_name": lock["item_name"],
+        "quantity":  lock["quantity"],
+        "released":  True,
+    })
 
 # ══════════════════════════════════════════════════════════════
 # POST /api/v1/stock/locks/expire
