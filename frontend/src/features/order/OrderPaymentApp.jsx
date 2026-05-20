@@ -1,4 +1,4 @@
-// ============================================================
+
 // frontend/src/features/order/OrderPaymentApp.jsx
 // Member 3 — Order & Payment
 // FR08–FR17, FR22–FR31
@@ -9,6 +9,7 @@
 //   FIX-1: Retry works for ALL payment methods (cash, wallet, meal_plan, online)
 //   FIX-2: Card payment requires all 3 fields filled & valid before Pay button enables
 //   FIX-3: Wallet payment requires a valid 11-digit Egyptian phone number
+//   FIX-4: idempotency key generated fresh on every placeOrder call (ref removed)
 //
 // INTEGRATION:
 //   - Uses shared apiFetch / apiLogout from ../../shared/api
@@ -243,8 +244,8 @@ export default function OrderPaymentApp() {
   const [walletPhoneTouched, setWalletPhoneTouched]= useState(false);
   const walletPhoneValid = isValidEgyptianPhone(walletPhone);
 
-  const timerRef    = useRef(null);
-  const idempKeyRef = useRef(generateIdempotencyKey(currentUser.id));
+  const timerRef = useRef(null);
+  // FIX-4: idempKeyRef removed — key is now generated fresh inside placeOrder()
 
   // ── Guard: redirect if no cart ─────────────────────────────
   useEffect(() => {
@@ -273,11 +274,13 @@ export default function OrderPaymentApp() {
         return;
       }
 
+      // FIX-4: Generate a fresh idempotency key on every call instead of reusing
+      // a stale ref value. Each genuine new order attempt gets its own unique key.
       const data = await apiFetch("/orders", {
         method: "POST",
         body: JSON.stringify({
           user_id:         currentUser.id,
-          idempotency_key: idempKeyRef.current,
+          idempotency_key: generateIdempotencyKey(currentUser.id),
           voucher_code:    incomingVoucher,
           items:           incomingCart.map(c => ({ menu_item_id: c.id, quantity: c.qty })),
         }),
