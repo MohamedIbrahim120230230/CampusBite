@@ -1,15 +1,11 @@
 import sys, os
-
-# Remove Vercel's vendored packages so our requirements.txt versions are used.
-# Without this, Vercel injects old vendored redis/fastapi/etc that lack SSL support.
-sys.path = [p for p in sys.path if "_vendor" not in p]
 sys.path.insert(0, os.path.dirname(__file__))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  
+    pass
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

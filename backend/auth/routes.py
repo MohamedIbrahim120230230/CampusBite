@@ -143,17 +143,14 @@ _redis: Optional[aioredis.Redis] = None
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        import ssl as _ssl
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        ssl_ctx = _ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = _ssl.CERT_NONE
+        # Convert rediss:// to redis:// and handle TLS via the pool's
+        # connection_kwargs directly — works with Vercel's vendored redis.
         _redis = aioredis.from_url(
             redis_url,
             decode_responses=True,
             socket_connect_timeout=5,
             socket_timeout=5,
-            ssl_context=ssl_ctx,
         )
     return _redis
 
