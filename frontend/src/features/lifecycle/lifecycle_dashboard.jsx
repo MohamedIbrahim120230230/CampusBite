@@ -16,6 +16,7 @@
 // ============================================================
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, apiLogout } from "../../shared/api";
 
@@ -113,7 +114,7 @@ function StatusBadge({ status }) {
 
 // ── Modal ─────────────────────────────────────────────────────
 function Modal({ title, children, onClose }) {
-  return (
+  return createPortal(
     <>
       <div className="lc-backdrop" onClick={onClose} />
       <div className="lc-modal-wrap" role="dialog" aria-modal="true">
@@ -127,7 +128,8 @@ function Modal({ title, children, onClose }) {
           {children}
         </div>
       </div>
-    </>
+    </>,
+    document.body
   );
 }
 
@@ -154,15 +156,17 @@ function StarRating({ value, onChange, readOnly }) {
 
 // ── Order card ────────────────────────────────────────────────
 function OrderCard({ order, role, actorId, onRefresh, onToast }) {
-  const [showAdvance,    setShowAdvance]    = useState(false);
-  const [showCancel,     setShowCancel]     = useState(false);
-  const [showRate,       setShowRate]       = useState(false);
-  const [cancelReason,   setCancelReason]   = useState("CUSTOMER_REQUEST");
-  const [cancelNote,     setCancelNote]     = useState("");
-  const [advanceNote,    setAdvanceNote]    = useState("");
-  const [stars,          setStars]          = useState(0);
-  const [ratingText,     setRatingText]     = useState("");
-  const [submittingRate, setSubmittingRate] = useState(false);
+  const [showAdvance,       setShowAdvance]       = useState(false);
+  const [showCancel,        setShowCancel]        = useState(false);
+  const [showRate,          setShowRate]          = useState(false);
+  const [cancelReason,      setCancelReason]      = useState("CUSTOMER_REQUEST");
+  const [cancelNote,        setCancelNote]        = useState("");
+  const [advanceNote,       setAdvanceNote]       = useState("");
+  const [stars,             setStars]             = useState(0);
+  const [ratingText,        setRatingText]        = useState("");
+  const [submittingRate,    setSubmittingRate]    = useState(false);
+  const [submittingAdvance, setSubmittingAdvance] = useState(false);
+  const [submittingCancel,  setSubmittingCancel]  = useState(false);
 
   const normRole   = role?.toUpperCase();
   const status     = order.status?.toLowerCase();
@@ -174,6 +178,7 @@ function OrderCard({ order, role, actorId, onRefresh, onToast }) {
 
   // PATCH /api/v1/orders/{id}/status
   async function doAdvance() {
+    setSubmittingAdvance(true);
     try {
       await apiFetch(`/orders/${order.id}/status`, {
         method:  "PATCH",
@@ -181,16 +186,19 @@ function OrderCard({ order, role, actorId, onRefresh, onToast }) {
         body:    JSON.stringify({ new_status: nextStatus, note: advanceNote || undefined }),
       });
       setShowAdvance(false);
+      setAdvanceNote("");
       onToast(`Order advanced to ${nextStatus}`, "success");
       onRefresh();
     } catch (e) {
-      setShowAdvance(false);
       onToast(e?.message || "Failed to advance order.", "error");
+    } finally {
+      setSubmittingAdvance(false);
     }
   }
 
   // POST /api/v1/orders/{id}/cancel
   async function doCancel() {
+    setSubmittingCancel(true);
     try {
       await apiFetch(`/orders/${order.id}/cancel`, {
         method:  "POST",
@@ -198,11 +206,13 @@ function OrderCard({ order, role, actorId, onRefresh, onToast }) {
         body:    JSON.stringify({ reason_code: cancelReason, note: cancelNote || undefined }),
       });
       setShowCancel(false);
+      setCancelNote("");
       onToast("Order cancelled.", "success");
       onRefresh();
     } catch (e) {
-      setShowCancel(false);
       onToast(e?.message || "Failed to cancel order.", "error");
+    } finally {
+      setSubmittingCancel(false);
     }
   }
 
@@ -285,8 +295,8 @@ function OrderCard({ order, role, actorId, onRefresh, onToast }) {
           </div>
           <div className="lc-modal-ft">
             <button className="lc-ghost-btn" onClick={() => setShowAdvance(false)}>Cancel</button>
-            <button data-testid="confirm-advance-btn" className="lc-primary-btn" onClick={doAdvance}>
-              <i className="bi bi-check-lg" /> Confirm
+            <button data-testid="confirm-advance-btn" className="lc-primary-btn" onClick={doAdvance} disabled={submittingAdvance}>
+              {submittingAdvance ? <><span className="lc-spinner-sm" /> Confirming…</> : <><i className="bi bi-check-lg" /> Confirm</>}
             </button>
           </div>
         </Modal>
@@ -309,8 +319,8 @@ function OrderCard({ order, role, actorId, onRefresh, onToast }) {
           </div>
           <div className="lc-modal-ft">
             <button className="lc-ghost-btn" onClick={() => setShowCancel(false)}>Back</button>
-            <button data-testid="confirm-cancel-btn" className="lc-danger-btn" onClick={doCancel}>
-              <i className="bi bi-x-circle-fill" /> Cancel Order
+            <button data-testid="confirm-cancel-btn" className="lc-danger-btn" onClick={doCancel} disabled={submittingCancel}>
+              {submittingCancel ? <><span className="lc-spinner-sm" /> Cancelling…</> : <><i className="bi bi-x-circle-fill" /> Cancel Order</>}
             </button>
           </div>
         </Modal>
@@ -345,51 +355,31 @@ function OrdersTab({ role, actorId, addToast }) {
   const [orders,     setOrders]     = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [liveActive, setLiveActive] = useState(false);
-  const esRefs   = useRef({});
   const normRole = role?.toUpperCase();
+  const pollRef  = useRef(null);
 
-const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const result = await apiFetch("/orders", { headers: actorHeaders(normRole, actorId) });
       const list = Array.isArray(result) ? result : (result?.data || []);
       setOrders(list);
+      setLiveActive(true);
     } catch (e) {
-      setOrders([]);
+      if (!silent) setOrders([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [normRole, actorId]);
 
-  useEffect(() => { load(); }, [load]);
-
-  // SSE live updates (FR36) — GET /api/v1/orders/{id}/stream
   useEffect(() => {
-    orders.forEach(order => {
-      if (esRefs.current[order.id]) return;
-      try {
-        const token = localStorage.getItem("jwt_token");
-        const base  = import.meta?.env?.VITE_API_BASE || "/api/v1";
-        const es = new EventSource(
-          `${base}/orders/${order.id}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`
-        );
-        es.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            setOrders(prev => prev.map(o =>
-              o.id === data.order_id ? { ...o, status: data.status || data.new_status } : o
-            ));
-            setLiveActive(true);
-          } catch {}
-        };
-        esRefs.current[order.id] = es;
-      } catch {}
-    });
+    load();
+    // Poll every 10 seconds for updates instead of SSE (avoids browser freeze)
+    pollRef.current = setInterval(() => load(true), 10000);
     return () => {
-      Object.values(esRefs.current).forEach(es => { try { es.close(); } catch {} });
-      esRefs.current = {};
+      clearInterval(pollRef.current);
     };
-  }, [orders.length]); // eslint-disable-line
+  }, [load]);
 
   const grouped = {
     Active:    orders.filter(o => ["placed","pending_payment","confirmed","preparing","ready_for_pickup","delivered"].includes(o.status?.toLowerCase())),
@@ -407,7 +397,7 @@ const load = useCallback(async () => {
             background: liveActive ? "var(--uc-acc2)" : "var(--uc-brd)",
             boxShadow:  liveActive ? "0 0 8px var(--uc-acc2)" : "none",
           }} title="Live SSE updates (FR36)" />
-          <span className="lc-live-label">{liveActive ? "Live" : "Connecting…"}</span>
+          <span className="lc-live-label">{liveActive ? "Auto-refresh on" : "Loading…"}</span>
         </div>
         <button className="lc-ghost-btn" onClick={load}>
           <i className="bi bi-arrow-clockwise" /> Refresh
@@ -972,7 +962,7 @@ const LC_CSS = `
     background:none; border:1px solid var(--uc-brd); border-radius:var(--uc-rs);
     color:var(--uc-muted); cursor:pointer; font-size:15px; transition:all .2s; }
   .mp-logout-btn:hover { border-color:var(--uc-danger); color:var(--uc-danger); }
-  .lc-body { position:relative; z-index:1; padding:clamp(16px,3vw,28px); max-width:1000px; }
+  .lc-body { position:relative; z-index:1; padding:clamp(16px,3vw,28px); width:100%; }
   .lc-tabs { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--uc-brd); margin-bottom:24px; }
   .lc-tab { display:flex; align-items:center; gap:6px; background:none; border:none;
     border-bottom:2px solid transparent; color:var(--uc-muted); font-family:var(--fb);
