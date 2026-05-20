@@ -209,6 +209,13 @@ def admin_delete_voucher(code: str):
 async def health():
     return {"status": "ok"}
 
+@app.get("/debug-env")
+async def debug_env():
+    return {
+        "DATABASE_URL": os.environ.get("DATABASE_URL", "NOT SET"),
+        "DB_HOST": os.environ.get("DB_HOST", "NOT SET"),
+    }
+
 @app.get("/")
 async def root():
     return {"message": "Cafeteria API running", "docs": "/docs"}
