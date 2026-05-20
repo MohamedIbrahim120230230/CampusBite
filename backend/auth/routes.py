@@ -144,19 +144,17 @@ async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        # FIX-1: Vercel's Python runtime rejects Redis Cloud's TLS cert by
-        # default. We must pass an explicit SSLContext with cert verification
-        # disabled — ssl_cert_reqs=None alone is ignored by the vendored lib.
-        ssl_ctx = _ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = _ssl.CERT_NONE
+        # Strip rediss:// → redis:// and pass ssl=True separately.
+        # The vendored redis lib on Vercel doesn't accept ssl_context.
+        redis_url = redis_url.replace("rediss://", "redis://")
         _redis = aioredis.from_url(
             redis_url,
             decode_responses=True,
             socket_connect_timeout=5,
             socket_timeout=5,
             retry_on_timeout=True,
-            ssl_context=ssl_ctx,       # ← explicit SSLContext, not ssl_cert_reqs
+            ssl=True,
+            ssl_cert_reqs="none",
         )
     return _redis
 
