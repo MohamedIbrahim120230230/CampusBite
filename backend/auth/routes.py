@@ -49,11 +49,8 @@ MAX_FAILED_ATTEMPTS      = 5                            # locks on 5th attempt
 
 UTC = timezone.utc
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres123@localhost:5432/cafeteria",
-)
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+DATABASE_URL = None
+REDIS_URL = None
 
 # University email domains
 ALLOWED_DOMAINS = ["ejust.edu.eg"]
@@ -95,9 +92,9 @@ _pool: Optional[asyncpg.Pool] = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres123@localhost:5432/cafeteria")
+        _pool = await asyncpg.create_pool(db_url, min_size=2, max_size=20)
     return _pool
-
 
 async def close_pool() -> None:
     global _pool
@@ -116,7 +113,8 @@ _redis: Optional[aioredis.Redis] = None
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        _redis = aioredis.from_url(redis_url, decode_responses=True)
     return _redis
 
 

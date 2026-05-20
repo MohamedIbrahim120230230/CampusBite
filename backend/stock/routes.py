@@ -35,10 +35,7 @@ from pydantic import BaseModel, Field, field_validator
 # Config
 # ─────────────────────────────────────────────────────────────
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres123@localhost:5432/cafeteria",
-)
+DATABASE_URL = None
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
 JWT_ALGO   = "HS256"
@@ -54,7 +51,8 @@ _pool: Optional[asyncpg.Pool] = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=20)
+        db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres123@localhost:5432/cafeteria")
+        _pool = await asyncpg.create_pool(db_url, min_size=2, max_size=20)
     return _pool
 
 
