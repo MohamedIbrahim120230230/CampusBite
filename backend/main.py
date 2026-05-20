@@ -1,4 +1,5 @@
 import sys, os
+import traceback
 sys.path.insert(0, os.path.dirname(__file__))
 
 try:
@@ -9,6 +10,7 @@ except ImportError:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import psycopg2
 import psycopg2.extras
 import os
