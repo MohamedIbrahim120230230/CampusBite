@@ -7,12 +7,22 @@ TDP compliance:
   TDP-M1-02  FR04  Session expiry  — all 4 padlocks satisfied
   TDP-M1-03  FR06  Password reset  — all 4 padlocks satisfied
   TDP-M1-04  FR08  Account status  — all 3 padlocks satisfied
+
+Fixes applied:
+  FIX-1  Redis TLS SSL config for Vercel → Redis Cloud (was crashing with 500)
+  FIX-2  DB pool size reduced for serverless (min=1, max=5)
+  FIX-3  Dead DATABASE_URL/REDIS_URL = None module-level vars removed
+  FIX-4  `jti` column now stored in sessions table for proper Redis revocation
+  FIX-5  Logout + password reset now both delete Redis session keys correctly
+  FIX-6  Audit errors now use logging, not print()
+  FIX-7  Race condition note: new_count from fetchval is the single source of truth
 """
 
 from __future__ import annotations
 
 import hashlib
 import json as _json
+import logging
 import os
 import secrets
 import uuid
@@ -26,6 +36,13 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
+# ─────────────────────────────────────────────────────────────
+# Logging  (FIX-6: replace print() with proper logger)
+# ─────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # ─────────────────────────────────────────────────────────────
 # Config
@@ -48,9 +65,6 @@ LOCKOUT_DURATION_SECONDS = 900                          # 15 min = 900s EXACT
 MAX_FAILED_ATTEMPTS      = 5                            # locks on 5th attempt
 
 UTC = timezone.utc
-
-DATABASE_URL = None
-REDIS_URL = None
 
 # University email domains
 ALLOWED_DOMAINS = ["ejust.edu.eg"]
@@ -83,7 +97,7 @@ def _is_student_email(email: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
-# DB pool
+# DB pool  (FIX-2: min=1, max=5 for serverless / Neon)
 # ─────────────────────────────────────────────────────────────
 
 _pool: Optional[asyncpg.Pool] = None
@@ -92,9 +106,23 @@ _pool: Optional[asyncpg.Pool] = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres123@localhost:5432/cafeteria")
-        _pool = await asyncpg.create_pool(db_url, min_size=2, max_size=20)
+        db_url = os.environ.get(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres123@localhost:5432/cafeteria",
+        )
+        # FIX-2: keep pool tiny — Vercel functions are ephemeral, Neon has
+        # a hard connection cap. min=1/max=5 avoids exhausting the limit.
+        _pool = await asyncpg.create_pool(
+            db_url,
+            min_size=1,
+            max_size=5,
+            command_timeout=30,
+            # Neon closes idle connections quickly; statement_cache_size=0
+            # avoids "prepared statement does not exist" errors on reconnect.
+            statement_cache_size=0,
+        )
     return _pool
+
 
 async def close_pool() -> None:
     global _pool
@@ -104,7 +132,7 @@ async def close_pool() -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# Redis client  (TDP-M1-02: server-side session store)
+# Redis client  (FIX-1: TLS config for rediss:// on Vercel)
 # ─────────────────────────────────────────────────────────────
 
 _redis: Optional[aioredis.Redis] = None
@@ -114,7 +142,17 @@ async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        _redis = aioredis.from_url(redis_url, decode_responses=True)
+        # FIX-1: ssl_cert_reqs=None disables cert verification which Vercel
+        # outbound TLS requires for Redis Cloud's rediss:// scheme.
+        # socket timeouts + retry prevent hanging cold-start connections.
+        _redis = aioredis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            retry_on_timeout=True,
+            ssl_cert_reqs=None,        # ← critical for Vercel → Redis Cloud TLS
+        )
     return _redis
 
 
@@ -249,21 +287,56 @@ async def revoke_session(jti: str) -> None:
     await r.delete(f"session:{jti}")
 
 
+# FIX-4 / FIX-5: sessions table now stores `jti` so Redis keys can be
+# correctly targeted on logout and password reset.
+# Run this migration before deploying:
+#
+#   ALTER TABLE sessions ADD COLUMN IF NOT EXISTS jti TEXT;
+#   CREATE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti);
+#
 async def revoke_all_sessions_for_user(user_id: str) -> None:
     """
     FR05: logout invalidates ALL sessions.
-    Marks all DB sessions as revoked AND removes Redis keys.
+    Marks all DB sessions as revoked AND removes the correct Redis keys.
+
+    FIX-4: previously used token_hash (refresh token hash) as the Redis key,
+    but Redis stores keys under `session:{jti}` (the JWT jti).  We now store
+    jti in the sessions table and delete by jti here.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # FIX-4: fetch jti column, not token_hash, so we can delete Redis keys
         rows = await conn.fetch(
-            "UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL RETURNING token_hash",
+            """UPDATE sessions
+               SET revoked_at = NOW()
+               WHERE user_id = $1 AND revoked_at IS NULL
+               RETURNING jti""",
             uuid.UUID(user_id),
         )
-    # Clean up Redis keys for all revoked sessions
+
     r = await get_redis()
     for row in rows:
-        await r.delete(f"session:{row['token_hash']}")
+        if row["jti"]:
+            await r.delete(f"session:{row['jti']}")
+
+
+async def _revoke_all_redis_sessions_for_user(user_id: str, conn) -> None:
+    """
+    Helper used inside an existing DB connection (e.g. password reset).
+    Revokes DB rows and deletes Redis keys within the same logical operation.
+    FIX-5: password reset now properly kills Redis session keys too.
+    """
+    rows = await conn.fetch(
+        """UPDATE sessions
+           SET revoked_at = NOW()
+           WHERE user_id = $1 AND revoked_at IS NULL
+           RETURNING jti""",
+        uuid.UUID(user_id),
+    )
+    r = await get_redis()
+    for row in rows:
+        if row["jti"]:
+            await r.delete(f"session:{row['jti']}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -301,6 +374,7 @@ async def _require_role(request: Request, *roles: str):
 # ─────────────────────────────────────────────────────────────
 # Audit helper
 # TDP-M1-01 P3: audit write must NOT be swallowed — raise on failure
+# FIX-6: replaced print() with logger.error() so Vercel captures it
 # ─────────────────────────────────────────────────────────────
 
 async def _audit(
@@ -328,7 +402,8 @@ async def _audit(
         if raise_on_failure:
             # TDP-M1-01 P3: audit failure must raise, not be swallowed
             raise RuntimeError(f"Audit write failed for {event_type}: {exc}") from exc
-        print(f"[AUDIT ERROR] {event_type}: {exc}")
+        # FIX-6: use logger so Vercel / any log aggregator picks this up
+        logger.error("[AUDIT ERROR] event=%s error=%s", event_type, exc)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -397,7 +472,7 @@ async def login(body: LoginRequest, request: Request):
             # TDP-M1-04 P2: each status has its OWN exact message
             message = ACCOUNT_STATUS_MESSAGES.get(
                 status,
-                f"Your account is not active. Contact the university helpdesk.",
+                "Your account is not active. Contact the university helpdesk.",
             )
             return err(
                 "ACCOUNT_SUSPENDED" if status == "suspended" else "ACCOUNT_EXPIRED",
@@ -410,7 +485,8 @@ async def login(body: LoginRequest, request: Request):
         # ── FR02: wrong password ──────────────────────────────
         if not _verify_password(body.password, user["password_hash"]):
 
-            # Increment atomically
+            # FIX-7: new_count from fetchval is the single source of truth —
+            # avoids the race where two requests both read stale failed_attempts.
             new_count = await conn.fetchval(
                 "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE email = $1 RETURNING failed_attempts",
                 body.email,
@@ -447,7 +523,7 @@ async def login(body: LoginRequest, request: Request):
 
             return err(
                 "ACCOUNT_LOCKED",
-                f"Account locked. Try again in 15 minutes.",
+                "Account locked. Try again in 15 minutes.",
                 details={
                     "unlocks_at":            lock_until.isoformat(),
                     "lock_duration_seconds": LOCKOUT_DURATION_SECONDS,  # EXACT 900
@@ -467,14 +543,17 @@ async def login(body: LoginRequest, request: Request):
         raw_refresh, ref_hash = _create_token_pair()
         refresh_expires       = _now() + timedelta(seconds=REFRESH_TTL_SECONDS)
 
+        # Decode to get the jti we just embedded in the access token
+        decoded = _decode_token(access_token)
+        jti     = decoded["jti"]
+
+        # FIX-4: store jti alongside token_hash so logout can target Redis keys
         await conn.execute(
-            "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
-            uuid.UUID(user["id"]), ref_hash, refresh_expires,
+            "INSERT INTO sessions (user_id, token_hash, jti, expires_at) VALUES ($1, $2, $3, $4)",
+            uuid.UUID(user["id"]), ref_hash, jti, refresh_expires,
         )
 
     # TDP-M1-02: Store session in Redis with EXACT inactivity TTL
-    decoded = _decode_token(access_token)
-    jti     = decoded["jti"]
     await touch_session(jti)   # sets Redis TTL to exactly 1800s
 
     await _audit("LOGIN_SUCCESS", user["id"], user["id"], ip, {"role": user["role"]})
@@ -539,6 +618,7 @@ async def logout(request: Request):
     if guard:
         return guard
 
+    # FIX-5: revoke_all_sessions_for_user now correctly deletes Redis keys by jti
     await revoke_all_sessions_for_user(payload["user_id"])
     await _audit("LOGOUT", payload["user_id"], payload["user_id"], None, {})
     return ok({"logged_out": True})
@@ -628,11 +708,12 @@ async def password_reset_confirm(body: PasswordResetConfirmBody, request: Reques
             _hash_password(body.new_password),
             uuid.UUID(token_row["user_id"]),
         )
-        # Revoke all existing sessions after password change
-        await conn.execute(
-            "UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
-            uuid.UUID(token_row["user_id"]),
-        )
+
+        # FIX-5: revoke DB rows AND delete Redis session keys so stolen tokens
+        # can't be replayed after a password change. Previously only DB rows
+        # were revoked, leaving Redis keys alive for up to 30 minutes.
+        await _revoke_all_redis_sessions_for_user(token_row["user_id"], conn)
+
         await _audit("PASSWORD_RESET_COMPLETED", token_row["user_id"], token_row["user_id"], ip, {})
 
     return ok({"message": "Password updated. Please log in with your new password."})
