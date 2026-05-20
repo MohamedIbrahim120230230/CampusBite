@@ -9,6 +9,7 @@ import time
 import json
 import psycopg2
 import psycopg2.extras
+import jwt as _jwt
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request
 
@@ -20,6 +21,7 @@ CANCELLATION_WINDOW_MIN = 15
 MAX_CONCURRENT_ORDERS   = 150
 IDEMPOTENCY_WINDOW_SEC  = 60
 MAX_ITEM_QUANTITY       = 20
+JWT_SECRET              = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
 
 router = APIRouter()   # FastAPI router — imported by main.py
 
@@ -43,6 +45,19 @@ def gen_uuid():
 # ─────────────────────────────────────────────────────────────
 def _is_prepaid(method):
     return method in ["online", "wallet", "meal_plan"]
+
+
+def _get_user_id_from_request(request: Request):
+    """Extract user_id from JWT token in Authorization header."""
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    try:
+        payload = _jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload.get("user_id")
+    except Exception:
+        return None
 
 
 def _release_stock(cur, order_id):
@@ -80,7 +95,14 @@ def _initiate_refund(cur, order_id, total, full=True, percent=1.0):
 async def place_order(request: Request):
     d = await request.json()
 
-    user_id         = d.get("user_id", "guest-user")
+    # ── Extract user_id from JWT token ──
+    user_id = _get_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "Authentication required."}
+        )
+
     idempotency_key = (
         d.get("idempotency_key")
         or request.headers.get("X-Idempotency-Key")
@@ -120,7 +142,6 @@ async def place_order(request: Request):
         cart_items_data = d.get("items", [])
         if not cart_items_data:
             try:
-                # ✅ FIX: Removed '::uuid' type cast to avoid string mismatch failures
                 cur.execute(
                     "SELECT items FROM cart_sessions WHERE user_id = %s", (user_id,)
                 )
@@ -151,9 +172,8 @@ async def place_order(request: Request):
                     detail={"code": "MAX_QTY_EXCEEDED", "message": f"Max {MAX_ITEM_QUANTITY} units per item"},
                 )
 
-            # ✅ FIX: Updated columns from 'is_available, stock_count' to 'stock_qty, active'
             cur.execute(
-                "SELECT id, name, price, stock_qty, active FROM menu_items WHERE id = %s FOR UPDATE NOWAIT",
+                "SELECT id, name, price, stock_qty, active FROM menu_items WHERE id = %s FOR UPDATE",
                 (item_id,),
             )
             item = cur.fetchone()
@@ -181,24 +201,21 @@ async def place_order(request: Request):
                 "quantity":     quantity,
                 "subtotal":     line_total,
             })
-            
-            # ✅ FIX: Updated target column to stock_qty
+
             cur.execute(
                 "UPDATE menu_items SET stock_qty = stock_qty - %s WHERE id = %s",
                 (quantity, item_id),
             )
 
-# ── Voucher ──────────────────────────────────────────
+        # ── Voucher ──────────────────────────────────────────
         discount, voucher_id = 0.0, None
         if voucher_code:
-            # ✅ Aligned with your 002 migration schema columns
             cur.execute(
                 "SELECT id, discount, min_order, expires_at, used_by FROM vouchers WHERE code = %s", (voucher_code,)
             )
             v = cur.fetchone()
-            
+
             if v:
-                # Handle timezone validation smoothly without syntax bugs
                 expires_aware = None
                 if v["expires_at"]:
                     expires_aware = (
@@ -206,15 +223,12 @@ async def place_order(request: Request):
                         if v["expires_at"].tzinfo
                         else v["expires_at"].replace(tzinfo=timezone.utc)
                     )
-                
+
                 not_expired = expires_aware is None or datetime.now(timezone.utc) <= expires_aware
-                
-                # Check if the voucher has not been used yet, is not expired, and meets min order amount
+
                 if v["used_by"] is None and not_expired and subtotal >= float(v["min_order"]):
                     discount = min(float(v["discount"]), subtotal)
                     voucher_id = v["id"]
-                    
-                    # Mark the voucher as used by the current user session
                     cur.execute(
                         "UPDATE vouchers SET used_by = %s WHERE id = %s", (user_id, voucher_id)
                     )
@@ -306,7 +320,6 @@ def list_orders():
         orders = []
         for r in rows:
             row = dict(r)
-            # ensure datetimes are serializable
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
@@ -327,7 +340,6 @@ def get_order(order_id: str):
         if not order:
             raise HTTPException(status_code=404, detail={"message": "Order not found"})
         order = dict(order)
-        # serialize datetimes
         for k, v in order.items():
             if hasattr(v, 'isoformat'):
                 order[k] = v.isoformat()
@@ -335,7 +347,6 @@ def get_order(order_id: str):
         order["items"] = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT * FROM payments WHERE order_id = %s", (order_id,))
         order["payments"] = [dict(r) for r in cur.fetchall()]
-        # lifecycle dashboard expects these field names
         order.setdefault("total_egp", order.get("total", 0))
         order.setdefault("placed_at", order.get("created_at"))
         for item in order["items"]:
@@ -370,7 +381,6 @@ async def cancel_order(order_id: str):
         if order["status"] == "confirmed":
             confirmed_at = order["confirmed_at"]
             if confirmed_at is None:
-                # confirmed_at not set — treat as confirmed just now, allow cancellation
                 confirmed_at = now
             elif not confirmed_at.tzinfo:
                 confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
@@ -541,8 +551,6 @@ async def initiate_payment(request: Request):
                 )
 
         payment_id = gen_uuid()
-        
-        # Explicit timezone handling for cross-compat database drivers
         now_time   = datetime.now(timezone.utc).replace(tzinfo=None)
         timeout_at = now_time + timedelta(seconds=PAYMENT_TIMEOUT_SECONDS)
 
@@ -563,7 +571,6 @@ async def initiate_payment(request: Request):
                 "method":     pm,
             }
 
-        # Handle automatic instant confirmation for cash/sufficient credit
         cur.execute(
             """
             INSERT INTO payments (id, order_id, amount, method, status, timeout_at, created_at)
