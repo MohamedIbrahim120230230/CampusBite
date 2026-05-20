@@ -118,12 +118,9 @@ psql -U postgres -d cafeteria -f database/migrations/003_create_order_payment.sq
 psql -U postgres -d cafeteria -f database/migrations/004_create_stock_resilience.sql
 psql -U postgres -d cafeteria -f database/migrations/005_create_lifecycle_reports.sql
 ```
-# Run any additional migration files in numeric order
+###  3. Run the backend
 ```
 
-### 3. Run the backend
-
-```powershell
 cd C:\Users\Administrator\Downloads\CampusBite\backend
 
 # Set the database connection string

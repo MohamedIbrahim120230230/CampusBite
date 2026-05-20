@@ -368,11 +368,12 @@ async def cancel_order(order_id: str):
             return {"success": True, "message": "Order cancelled successfully"}
 
         if order["status"] == "confirmed":
-            confirmed_at = (
-                order["confirmed_at"]
-                if order["confirmed_at"].tzinfo
-                else order["confirmed_at"].replace(tzinfo=timezone.utc)
-            )
+            confirmed_at = order["confirmed_at"]
+            if confirmed_at is None:
+                # confirmed_at not set — treat as confirmed just now, allow cancellation
+                confirmed_at = now
+            elif not confirmed_at.tzinfo:
+                confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
             if now <= confirmed_at + timedelta(minutes=CANCELLATION_WINDOW_MIN):
                 cur.execute(
                     "UPDATE orders SET status='cancelled', cancelled_at=NOW() WHERE id=%s", (order_id,)
