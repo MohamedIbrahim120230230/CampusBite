@@ -20,6 +20,13 @@ from lifecycle.lifecycle_admin import router as lifecycle_admin_router
 
 app = FastAPI(title="University Cafeteria API", version="1.0.0")
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "trace": traceback.format_exc()}
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
