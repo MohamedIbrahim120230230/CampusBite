@@ -219,7 +219,6 @@ export default function OrderPaymentApp() {
   const [payMethod,    setPayMethod]   = useState("online");
   const [payState,     setPayState]    = useState("idle");
   const [paymentId,    setPaymentId]   = useState(null);
-  const [iframeUrl,    setIframeUrl]   = useState(null);
   const [payError,     setPayError]    = useState(null);
   const [retryCount,   setRetryCount]  = useState(0);
   const [timeLeft,     setTimeLeft]    = useState(null);
@@ -360,24 +359,18 @@ export default function OrderPaymentApp() {
       return;
     }
 
-    // Online card payment — call Paymob to get iframe URL
+    // Online card payment — full backend flow
     try {
-      const data = await apiFetch("/payments/paymob/initiate", {
+      const data = await apiFetch("/payments/process", {
         method: "POST",
         body: JSON.stringify({
-          order_id:   order.id,
-          amount_egp: order.total,
-          billing: {
-            first_name: currentUser.name?.split(" ")[0] || "Student",
-            last_name:  currentUser.name?.split(" ")[1] || "User",
-            email:      currentUser.email || "student@uni.edu",
-            phone:      "01000000000",
-          },
+          order_id:        order.id,
+          payment_method:  payMethod,
+          idempotency_key: generateIdempotencyKey(order.id),
         }),
       });
-      setPaymentId(data.payment_id || null);
-      setIframeUrl(data.iframe_url);
-      // stays in "processing" — iframe handles the rest
+      setPaymentId(data.payment_id || data.payment?.id || null);
+      // Online stays in "processing" state — user must click the Pay button
     } catch (e) {
       setPayState("failed");
       setPayError({ message: e?.message || "Payment initiation failed.", code: e?.code });
@@ -403,31 +396,6 @@ export default function OrderPaymentApp() {
     }, 1000);
     return () => clearInterval(timerRef.current);
   }, [step, payState, payMethod]);
-
-  // ── Listen for Paymob iframe result via postMessage ────────
-  useEffect(() => {
-    const handleMessage = (e) => {
-      // Paymob sends a message from the iframe when payment completes
-      const d = typeof e.data === "string"
-        ? (() => { try { return JSON.parse(e.data); } catch { return {}; } })()
-        : (e.data || {});
-
-      // Paymob message has txn_response_code or success field
-      if (!d.txn_response_code && d.type !== "paymob" && d.success === undefined) return;
-
-      clearInterval(timerRef.current);
-
-      if (d.success === true || d.txn_response_code === "APPROVED") {
-        setPayState("success");
-        setOrder(o => o ? { ...o, status: "confirmed", confirmed_at: new Date().toISOString() } : o);
-      } else if (d.success === false || (d.txn_response_code && d.txn_response_code !== "APPROVED")) {
-        setPayState("failed");
-        setPayError({ message: "Payment declined by bank. Please try a different card.", code: d.txn_response_code || "DECLINED" });
-      }
-    };
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
 
   // ── Confirm payment (online only) ──────────────────────────
   const confirmOrder = async () => {
@@ -857,10 +825,10 @@ export default function OrderPaymentApp() {
             <div className="op-centered">
               <div className="op-card op-card--narrow">
 
-                {/* Online — processing: show Paymob iframe */}
+                {/* Online — processing */}
                 {payState === "processing" && payMethod === "online" && (
                   <>
-                    <div className="op-pay-hero" style={{ marginBottom: 12 }}>
+                    <div className="op-pay-hero">
                       <div className="op-pay-icon-wrap">
                         <i className="bi bi-shield-lock-fill" />
                       </div>
@@ -874,30 +842,41 @@ export default function OrderPaymentApp() {
                       <span className="op-countdown-timer">{fmtTime(timeLeft || 0)}</span>
                     </div>
 
-                    {/* Paymob hosted iframe — loads the real card form */}
-                    {iframeUrl ? (
-                      <iframe
-                        src={iframeUrl}
-                        title="Paymob Payment"
-                        style={{
-                          width:        "100%",
-                          height:       460,
-                          border:       "none",
-                          borderRadius: "var(--uc-rs)",
-                          marginTop:    12,
-                        }}
-                        allow="payment"
-                      />
-                    ) : (
-                      <div className="op-loading" style={{ padding: "40px 20px" }}>
-                        <div className="op-spinner" />
-                        <span style={{ fontSize: 13 }}>Loading payment page…</span>
+                    {/* Card summary — details already collected on checkout step */}
+                    <div className="op-card-summary">
+                      <i className="bi bi-credit-card-2-front-fill" style={{ fontSize: 20, color: "var(--uc-acc)" }} />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>
+                          •••• •••• •••• {cardNumber.replace(/\s/g, "").slice(-4)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--uc-muted)", marginTop: 2 }}>
+                          Expires {cardExpiry}
+                        </div>
                       </div>
-                    )}
+                      <i className="bi bi-check-circle-fill" style={{ marginLeft: "auto", color: "var(--uc-acc2)", fontSize: 16 }} />
+                    </div>
+
+                    <button
+                      className="op-primary-btn op-primary-btn--green"
+                      onClick={confirmOrder}
+                      disabled={loading}
+                    >
+                      {loading
+                        ? <><span className="op-spinner-sm" /> Confirming…</>
+                        : <>Pay {Number(order.total).toFixed(2)} EGP</>
+                      }
+                    </button>
 
                     {retryCount > 0 && (
                       <p className="op-retry-hint">Attempt {retryCount + 1} of {MAX_PAYMENT_RETRIES + 1}</p>
                     )}
+
+                    <div className="op-sim-row">
+                      <span className="op-sim-label">Simulate failure:</span>
+                      <button className="op-sim-btn" onClick={() => simulateFailure("insufficient_funds")}>NSF</button>
+                      <button className="op-sim-btn" onClick={() => simulateFailure("card_expired")}>Expired</button>
+                      <button className="op-sim-btn" onClick={() => simulateFailure("gateway_error")}>Gateway</button>
+                    </div>
                   </>
                 )}
 
@@ -1425,3 +1404,4 @@ const OP_CSS = `
     .mp-nav-tabs { display:none; }
   }
 `;
+

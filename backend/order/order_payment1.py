@@ -7,7 +7,6 @@ import uuid
 import threading
 import time
 import json
-import httpx
 import psycopg2
 import psycopg2.extras
 import jwt as _jwt
@@ -17,18 +16,12 @@ from fastapi import APIRouter, HTTPException, Request
 # ─────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────
-PAYMENT_TIMEOUT_SECONDS  = 600
-CANCELLATION_WINDOW_MIN  = 15
-MAX_CONCURRENT_ORDERS    = 150
-IDEMPOTENCY_WINDOW_SEC   = 60
-MAX_ITEM_QUANTITY        = 20
-JWT_SECRET               = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
-
-# Paymob credentials
-PAYMOB_API_KEY        = os.getenv("PAYMOB_API_KEY", "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJjbGFzcyI6Ik1lcmNoYW50IiwicHJvZmlsZV9wayI6MTE2NTgxNSwibmFtZSI6ImluaXRpYWwifQ.Rb_ajNy_z-UmYsMA10zwRRqGm3BfWDpIrQuEnST2R03Gi9Soc9PuEqzv3ED9-CtI3w6hHmLrxY_LwM5oGKaFDg")
-PAYMOB_INTEGRATION_ID = int(os.getenv("PAYMOB_INTEGRATION_ID", "5678867"))
-PAYMOB_IFRAME_ID      = os.getenv("PAYMOB_IFRAME_ID", "1046041")
-PAYMOB_BASE           = "https://accept.paymob.com/api"
+PAYMENT_TIMEOUT_SECONDS = 600
+CANCELLATION_WINDOW_MIN = 15
+MAX_CONCURRENT_ORDERS   = 150
+IDEMPOTENCY_WINDOW_SEC  = 60
+MAX_ITEM_QUANTITY       = 20
+JWT_SECRET              = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
 
 router = APIRouter()   # FastAPI router — imported by main.py
 
@@ -697,159 +690,6 @@ async def retry_payment(payment_id: str):
     finally:
         cur.close()
         conn.close()
-
-
-# ════════════════════════════════════════════════════════════
-# PAYMOB PAYMENT ROUTES
-# ════════════════════════════════════════════════════════════
-
-@router.post("/api/v1/payments/paymob/initiate")
-async def paymob_initiate(request: Request):
-    """
-    3-step Paymob integration:
-      1. Authenticate  → get auth_token
-      2. Create order  → get paymob_order_id
-      3. Get pay key   → build iframe URL returned to frontend
-    """
-    d          = await request.json()
-    order_id   = d.get("order_id")
-    amount_egp = float(d.get("amount_egp", 0))
-    billing    = d.get("billing", {})
-
-    if not order_id or amount_egp <= 0:
-        raise HTTPException(status_code=400, detail={"message": "order_id and amount_egp are required"})
-
-    # Amount in piastres (EGP × 100)
-    amount_cents = int(round(amount_egp * 100))
-
-    async with httpx.AsyncClient(timeout=30) as client:
-
-        # ── Step 1: Authenticate ─────────────────────────────
-        auth_res = await client.post(
-            f"{PAYMOB_BASE}/auth/tokens",
-            json={"api_key": PAYMOB_API_KEY},
-        )
-        if auth_res.status_code != 201:
-            raise HTTPException(status_code=502, detail={"message": "Paymob authentication failed"})
-        auth_token = auth_res.json()["token"]
-
-        # ── Step 2: Create Paymob order ──────────────────────
-        order_res = await client.post(
-            f"{PAYMOB_BASE}/ecommerce/orders",
-            json={
-                "auth_token":     auth_token,
-                "delivery_needed": False,
-                "amount_cents":   amount_cents,
-                "currency":       "EGP",
-                "merchant_order_id": order_id,
-                "items":          [],
-            },
-        )
-        if order_res.status_code != 201:
-            raise HTTPException(status_code=502, detail={"message": "Paymob order creation failed"})
-        paymob_order_id = order_res.json()["id"]
-
-        # ── Step 3: Get payment key ───────────────────────────
-        pay_key_res = await client.post(
-            f"{PAYMOB_BASE}/acceptance/payment_keys",
-            json={
-                "auth_token":     auth_token,
-                "amount_cents":   amount_cents,
-                "expiration":     PAYMENT_TIMEOUT_SECONDS,
-                "order_id":       paymob_order_id,
-                "currency":       "EGP",
-                "integration_id": PAYMOB_INTEGRATION_ID,
-                "billing_data": {
-                    "apartment":       "NA",
-                    "email":           billing.get("email", "student@uni.edu"),
-                    "floor":           "NA",
-                    "first_name":      billing.get("first_name", "Student"),
-                    "street":          "NA",
-                    "building":        "NA",
-                    "phone_number":    billing.get("phone", "01000000000"),
-                    "shipping_method": "NA",
-                    "postal_code":     "NA",
-                    "city":            "Cairo",
-                    "country":         "EG",
-                    "last_name":       billing.get("last_name", "User"),
-                    "state":           "Cairo",
-                },
-            },
-        )
-        if pay_key_res.status_code != 201:
-            raise HTTPException(status_code=502, detail={"message": "Paymob payment key generation failed"})
-        payment_key = pay_key_res.json()["token"]
-
-    iframe_url = f"https://accept.paymob.com/api/acceptance/iframes/{PAYMOB_IFRAME_ID}?payment_token={payment_key}"
-
-    # Store payment_key → order_id mapping in DB so webhook can find the order
-    conn = get_db()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    try:
-        payment_id = gen_uuid()
-        timeout_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=PAYMENT_TIMEOUT_SECONDS)
-        cur.execute(
-            """
-            INSERT INTO payments (id, order_id, amount, method, status, timeout_at, created_at)
-            VALUES (%s, %s, %s, 'online', 'pending', %s, NOW())
-            """,
-            (payment_id, order_id, amount_egp, timeout_at),
-        )
-        cur.execute("UPDATE orders SET payment_method='online' WHERE id=%s", (order_id,))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-
-    return {
-        "success":    True,
-        "iframe_url": iframe_url,
-        "payment_id": payment_id,
-    }
-
-
-@router.post("/api/v1/payments/paymob/webhook")
-async def paymob_webhook(request: Request):
-    """
-    Paymob posts transaction results here.
-    Configure this URL in your Paymob dashboard → Payment Integrations → Webhook URL:
-      https://YOUR_DOMAIN/api/v1/payments/paymob/webhook
-    """
-    data = await request.json()
-
-    # Paymob wraps the response in obj.obj
-    txn = data.get("obj", data)
-    success       = txn.get("success", False)
-    merchant_oid  = txn.get("order", {}).get("merchant_order_id")  # this is our order_id
-    txn_id        = str(txn.get("id", ""))
-    failure_code  = txn.get("data", {}).get("message", "unknown")
-
-    if not merchant_oid:
-        return {"received": True}
-
-    conn = get_db()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    try:
-        if success:
-            cur.execute(
-                "UPDATE payments SET status='success', transaction_id=%s WHERE order_id=%s AND method='online' AND status='pending'",
-                (txn_id, merchant_oid),
-            )
-            cur.execute(
-                "UPDATE orders SET status='confirmed', confirmed_at=NOW() WHERE id=%s",
-                (merchant_oid,),
-            )
-        else:
-            cur.execute(
-                "UPDATE payments SET status='failed', failure_reason=%s WHERE order_id=%s AND method='online' AND status='pending'",
-                (failure_code, merchant_oid),
-            )
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-
-    return {"received": True}
 
 
 # ─────────────────────────────────────────────────────────────
