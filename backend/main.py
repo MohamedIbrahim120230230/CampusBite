@@ -19,7 +19,10 @@ app = FastAPI(title="University Cafeteria API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://campus-bite-ys9d.vercel.app"],
+    allow_origins=[
+        "https://campus-bite-ys9d.vercel.app",
+        "https://campus-bite-ys9d-2w7oofo0v-mohamedibrahim120.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
