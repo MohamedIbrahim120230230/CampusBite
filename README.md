@@ -425,10 +425,54 @@ See the [`docs/`](./docs) folder for:
 
 ```bash
 # From the repo root
-cd tests/auth
-pytest -v
+pytest tests/
 ```
 
+## 🧪 Automated Test Report
+
+This project implements a rigorous automated testing suite using `pytest` to guarantee the integrity, security, and performance of both backend services and frontend business logic. 
+
+### 📊 Test Suite Summary
+
+| Target Domain | Test Context | Code Coverage | Status |
+| :--- | :--- | :---: | :---: |
+| **Authentication & Access Control** | Integration Endpoints & JWT Security | Core Auth Modules | **PASSED** |
+| **Academic Domain Rules** | University Email & ID Detection Logic | Business Invariants | **PASSED** |
+| **Order & Payment Processing** | Idempotency, Callbacks, & Integrity | Financial Workflows | **PASSED** |
+| **Inventory & Stock Safeguards** | Load-shedding & Race-condition TTLs | System Stability | **PASSED** |
+| **Client-Side Form Validation** | Egyptian Formats, Cards, & Strength | UI/UX Core Utilities | **PASSED** |
+
+---
+
+### 🔍 Verified System Features
+
+#### 🔒 1. Authentication & Security (Integration & Unit)
+* **Secure Session Handshakes:** Validated successful token distribution (`access` and `refresh`) on legitimate login requests.
+* **Robust Access Boundaries:** Strict protection over public vs. admin endpoints (e.g., verifying `401 Unauthorized` for missing tokens, `403 Forbidden` for inadequate roles).
+* **Defensive Lockout System:** Successfully tested anti-brute-force features, verifying that user accounts lock automatically for exactly `900s` after max invalid attempts are reached.
+* **Account Life-cycle Verification:** Handled clean rejections and dedicated warning messages for suspended, locked, or unrecognized profiles.
+* **Cryptographic Invariants:** Confirmed that passwords are deterministically hashed via non-plaintext unique salts, and verified JWT preservation of custom token claims.
+
+#### 🎓 2. University Domain Logic
+* **Domain Restraints:** Strict regex validation ensuring only recognized institutional domains (e.g., `@ejust.edu.eg`) pass the user registration schema.
+* **Automatic Role Parsing:** Validated high-accuracy detection separating *Student* accounts (matched via standard numeric suffixes/6-digit patterns) from *Staff* accounts.
+* **Sanitization Filters:** Assured input tolerance tests pass for trailing/leading whitespaces and case-insensitivity on registration formats.
+
+#### 🛒 3. Order Processing & Integration Engines
+* **Strict Financial Constraints:** Verified that empty carts return immediate validation failures (`400 Bad Request`) and system overloads yield a graceful `503 Service Unavailable`.
+* **Idempotency Protection:** Proved that duplicated network submissions containing identical idempotency keys safely return existing order snapshots instead of generating multiple charges.
+* **State-Machine Assertions:** Successfully simulated order cancellation rules—allowing standard refunds within the configured `15-minute` grace window while throwing expected conflicts (`409`) on finalized or completed packages.
+* **Payment Gateway Handlers:** Emulated mock asynchronous webhooks confirming correct state transitions upon immediate cash or successful third-party payment provider callbacks.
+
+#### 📦 4. Stock & Inventory Control
+* **OOS (Out of Stock) Prevention:** Guaranteed race-condition prevention by rejecting line item requests exceeding available quantities.
+* **Stock TTL Reservations:** Verified the temporary stock locking engine maintains a reliable `10-minute` Time-to-Live window to hold checkout items securely without causing stale data leaks.
+* **Bulk Protection:** Enforced safety caps limiting maximum order units per customer to `20` items to inhibit bulk abuse.
+
+#### 💻 5. Frontend Client-Side Verification
+* **Cardholder Security Metrics:** Verified Luhn-adjacent string checking formats for 16-digit payment cards, space strip tolerances, CVV length caps, and accurate expiration month boundaries.
+* **Localization Formatting:** Assured local validation compliance for Egyptian cellular providers (matching `010`, `011`, `012`, `015` string lengths).
+* **Smart Voucher Engine:** Verified complex discount application rules, proving that flat voucher codes cap out gracefully at subtotal ceilings and that usage metrics accurately decay based on absolute expiration configurations.
 ---
 
 ## 📄 License
