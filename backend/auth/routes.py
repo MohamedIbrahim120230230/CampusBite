@@ -143,20 +143,18 @@ _redis: Optional[aioredis.Redis] = None
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
+        import ssl as _ssl
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        # Vercel's vendored redis lib is old — it only accepts TLS via the
-        # URL scheme. Use from_url with rediss:// but disable cert checks
-        # by passing connection_class with ssl_cert_reqs patched out.
-        import redis.asyncio.connection as _rc
-        _orig = _rc.SSLConnection.__init__
-
-        def _patched_ssl_init(self, **kwargs):
-            kwargs.pop("ssl_cert_reqs", None)
-            kwargs["ssl_cert_reqs"] = None
-            _orig(self, **kwargs)
-
-        _rc.SSLConnection.__init__ = _patched_ssl_init
-        _redis = aioredis.from_url(redis_url, decode_responses=True)
+        ssl_ctx = _ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = _ssl.CERT_NONE
+        _redis = aioredis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            ssl_context=ssl_ctx,
+        )
     return _redis
 
 # ─────────────────────────────────────────────────────────────

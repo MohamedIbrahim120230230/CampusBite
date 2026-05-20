@@ -1,4 +1,8 @@
 import sys, os
+
+# Remove Vercel's vendored packages so our requirements.txt versions are used.
+# Without this, Vercel injects old vendored redis/fastapi/etc that lack SSL support.
+sys.path = [p for p in sys.path if "_vendor" not in p]
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
@@ -162,7 +166,7 @@ def admin_create_voucher(data: dict):
     discount_value = float(data.get("discount_value", 0))
     min_order      = float(data.get("min_order", 0))
     max_uses       = int(data.get("max_uses", 1))
-    expires_at     = data.get("expires_at")          # ISO string from frontend
+    expires_at     = data.get("expires_at")
 
     if not code:
         raise HTTPException(status_code=400, detail={"code": "MISSING_CODE", "message": "Voucher code is required."})
@@ -171,7 +175,6 @@ def admin_create_voucher(data: dict):
     if not expires_at:
         raise HTTPException(status_code=400, detail={"code": "MISSING_EXPIRY", "message": "Expiry date is required."})
 
-    # For percentage vouchers the discount column stores the % value (e.g. 50 for 50%)
     discount_col = discount_value if discount_type in ("flat", "percent") else 0
 
     conn = get_db()
