@@ -111,6 +111,8 @@ cd CampusBite
 Create the database and run migrations in order:
 
 ```bash
+set PATH=%PATH%;C:\Program Files\PostgreSQL\18\bin
+set PGPASSWORD=postgres123
 psql -U postgres -c "CREATE DATABASE cafeteria;"
 psql -U postgres -d cafeteria -f database/migrations/001_create_users.sql
 psql -U postgres -d cafeteria -f database/migrations/002_create_menu_cart.sql
