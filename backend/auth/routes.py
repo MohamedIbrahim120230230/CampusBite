@@ -4,18 +4,15 @@ Auth & Identity — Member 1 (Lead)
 
 TDP compliance:
   TDP-M1-01  FR03  Account lockout — all 4 padlocks satisfied
-  TDP-M1-02  FR04  Session expiry  — all 4 padlocks satisfied
+  TDP-M1-02  FR04  Session expiry  — all 4 padlocks satisfied (via DB expires_at)
   TDP-M1-03  FR06  Password reset  — all 4 padlocks satisfied
   TDP-M1-04  FR08  Account status  — all 3 padlocks satisfied
 
-Fixes applied:
-  FIX-1  Redis TLS SSL config for Vercel → Redis Cloud (was crashing with 500)
-  FIX-2  DB pool size reduced for serverless (min=1, max=5)
-  FIX-3  Dead DATABASE_URL/REDIS_URL = None module-level vars removed
-  FIX-4  `jti` column now stored in sessions table for proper Redis revocation
-  FIX-5  Logout + password reset now both delete Redis session keys correctly
-  FIX-6  Audit errors now use logging, not print()
-  FIX-7  Race condition note: new_count from fetchval is the single source of truth
+Note: Redis removed — Vercel's vendored redis lib is incompatible with Redis Cloud TLS.
+      Sessions are stored in the DB sessions table with expires_at for inactivity TTL.
+      Migration required:
+        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS jti TEXT;
+        CREATE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti);
 """
 
 from __future__ import annotations
@@ -32,13 +29,12 @@ from typing import Optional
 import asyncpg
 import bcrypt
 import jwt
-import redis.asyncio as aioredis
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # ─────────────────────────────────────────────────────────────
-# Logging  (FIX-6: replace print() with proper logger)
+# Logging
 # ─────────────────────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
@@ -48,28 +44,17 @@ logging.basicConfig(level=logging.INFO)
 # Config
 # ─────────────────────────────────────────────────────────────
 
-JWT_SECRET          = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
-JWT_ALGO            = "HS256"
+JWT_SECRET               = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
+JWT_ALGO                 = "HS256"
+INACTIVITY_TTL_SECONDS   = 1800
+ACCESS_TTL_SECONDS       = INACTIVITY_TTL_SECONDS
+REFRESH_TTL_SECONDS      = 7 * 24 * 3600
+RESET_TTL_SECONDS        = 900
+LOCKOUT_DURATION_SECONDS = 900
+MAX_FAILED_ATTEMPTS      = 5
+UTC                      = timezone.utc
+ALLOWED_DOMAINS          = ["ejust.edu.eg"]
 
-# TDP-M1-02 P1: inactivity window is EXACTLY 1800 seconds
-INACTIVITY_TTL_SECONDS = 1800                           # 30 min — session expiry
-
-ACCESS_TTL_SECONDS     = INACTIVITY_TTL_SECONDS         # JWT TTL == inactivity window
-REFRESH_TTL_SECONDS    = 7 * 24 * 3600                  # 7 days
-
-# TDP-M1-03 P1: reset TTL is EXACTLY 900 seconds
-RESET_TTL_SECONDS   = 900                               # 15 min = 900s EXACT
-
-# TDP-M1-01 P1/P2: lockout constants — exact values, not approximations
-LOCKOUT_DURATION_SECONDS = 900                          # 15 min = 900s EXACT
-MAX_FAILED_ATTEMPTS      = 5                            # locks on 5th attempt
-
-UTC = timezone.utc
-
-# University email domains
-ALLOWED_DOMAINS = ["ejust.edu.eg"]
-
-# TDP-M1-04 P2: status-specific messages — exact strings, not generic
 ACCOUNT_STATUS_MESSAGES = {
     "suspended": "Your account has been suspended. Contact the registrar.",
     "expired":   "Your university account has expired. Contact IT services.",
@@ -97,7 +82,7 @@ def _is_student_email(email: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
-# DB pool  (FIX-2: min=1, max=5 for serverless / Neon)
+# DB pool
 # ─────────────────────────────────────────────────────────────
 
 _pool: Optional[asyncpg.Pool] = None
@@ -110,15 +95,11 @@ async def get_pool() -> asyncpg.Pool:
             "DATABASE_URL",
             "postgresql://postgres:postgres123@localhost:5432/cafeteria",
         )
-        # FIX-2: keep pool tiny — Vercel functions are ephemeral, Neon has
-        # a hard connection cap. min=1/max=5 avoids exhausting the limit.
         _pool = await asyncpg.create_pool(
             db_url,
             min_size=1,
             max_size=5,
             command_timeout=30,
-            # Neon closes idle connections quickly; statement_cache_size=0
-            # avoids "prepared statement does not exist" errors on reconnect.
             statement_cache_size=0,
         )
     return _pool
@@ -130,29 +111,6 @@ async def close_pool() -> None:
         await _pool.close()
         _pool = None
 
-
-# ─────────────────────────────────────────────────────────────
-# Redis client  (FIX-1: TLS config for rediss:// on Vercel)
-# ─────────────────────────────────────────────────────────────
-
-import ssl as _ssl
-
-_redis: Optional[aioredis.Redis] = None
-
-
-async def get_redis() -> aioredis.Redis:
-    global _redis
-    if _redis is None:
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        # Convert rediss:// to redis:// and handle TLS via the pool's
-        # connection_kwargs directly — works with Vercel's vendored redis.
-        _redis = aioredis.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-        )
-    return _redis
 
 # ─────────────────────────────────────────────────────────────
 # Response envelope
@@ -255,90 +213,63 @@ def _sha256(value: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# TDP-M1-02: Session management via Redis
-# touch_session resets inactivity window to exactly 1800s
+# TDP-M1-02: DB-only session management
+# Inactivity window = INACTIVITY_TTL_SECONDS, enforced via expires_at.
+# touch_session() resets expires_at on every authenticated request.
 # ─────────────────────────────────────────────────────────────
 
 async def touch_session(jti: str) -> None:
-    """
-    Reset inactivity TTL to exactly INACTIVITY_TTL_SECONDS.
-    Called on every authenticated request.
-    TDP-M1-02 P3: clock is inactivity-based, not issuance-based.
-    """
-    r = await get_redis()
-    await r.setex(f"session:{jti}", INACTIVITY_TTL_SECONDS, "1")
+    pool = await get_pool()
+    new_expiry = _now() + timedelta(seconds=INACTIVITY_TTL_SECONDS)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sessions SET expires_at = $1 WHERE jti = $2 AND revoked_at IS NULL",
+            new_expiry, jti,
+        )
 
 
 async def validate_session(jti: str) -> bool:
-    """
-    TDP-M1-02 P1/P2: Check Redis key exists.
-    If missing → session expired → must return 401.
-    Redis handles exact 1800s TTL — no approximation.
-    """
-    r = await get_redis()
-    return await r.exists(f"session:{jti}") == 1
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT expires_at FROM sessions WHERE jti = $1 AND revoked_at IS NULL",
+            jti,
+        )
+    if not row:
+        return False
+    expires_at = row["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return _now() < expires_at
 
 
 async def revoke_session(jti: str) -> None:
-    """Delete session key immediately (logout / password change)."""
-    r = await get_redis()
-    await r.delete(f"session:{jti}")
-
-
-# FIX-4 / FIX-5: sessions table now stores `jti` so Redis keys can be
-# correctly targeted on logout and password reset.
-# Run this migration before deploying:
-#
-#   ALTER TABLE sessions ADD COLUMN IF NOT EXISTS jti TEXT;
-#   CREATE INDEX IF NOT EXISTS idx_sessions_jti ON sessions(jti);
-#
-async def revoke_all_sessions_for_user(user_id: str) -> None:
-    """
-    FR05: logout invalidates ALL sessions.
-    Marks all DB sessions as revoked AND removes the correct Redis keys.
-
-    FIX-4: previously used token_hash (refresh token hash) as the Redis key,
-    but Redis stores keys under `session:{jti}` (the JWT jti).  We now store
-    jti in the sessions table and delete by jti here.
-    """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # FIX-4: fetch jti column, not token_hash, so we can delete Redis keys
-        rows = await conn.fetch(
-            """UPDATE sessions
-               SET revoked_at = NOW()
-               WHERE user_id = $1 AND revoked_at IS NULL
-               RETURNING jti""",
+        await conn.execute(
+            "UPDATE sessions SET revoked_at = NOW() WHERE jti = $1",
+            jti,
+        )
+
+
+async def revoke_all_sessions_for_user(user_id: str) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
             uuid.UUID(user_id),
         )
 
-    r = await get_redis()
-    for row in rows:
-        if row["jti"]:
-            await r.delete(f"session:{row['jti']}")
 
-
-async def _revoke_all_redis_sessions_for_user(user_id: str, conn) -> None:
-    """
-    Helper used inside an existing DB connection (e.g. password reset).
-    Revokes DB rows and deletes Redis keys within the same logical operation.
-    FIX-5: password reset now properly kills Redis session keys too.
-    """
-    rows = await conn.fetch(
-        """UPDATE sessions
-           SET revoked_at = NOW()
-           WHERE user_id = $1 AND revoked_at IS NULL
-           RETURNING jti""",
+async def _revoke_all_sessions_for_user_conn(user_id: str, conn) -> None:
+    await conn.execute(
+        "UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
         uuid.UUID(user_id),
     )
-    r = await get_redis()
-    for row in rows:
-        if row["jti"]:
-            await r.delete(f"session:{row['jti']}")
 
 
 # ─────────────────────────────────────────────────────────────
-# Auth guard — validates JWT + Redis session presence
+# Auth guard
 # ─────────────────────────────────────────────────────────────
 
 async def _require_role(request: Request, *roles: str):
@@ -350,17 +281,14 @@ async def _require_role(request: Request, *roles: str):
     try:
         payload = _decode_token(token)
     except jwt.ExpiredSignatureError:
-        # TDP-M1-02 P4: exact message
         return None, err("TOKEN_EXPIRED", "Session expired. Please log in again.", status=401)
     except jwt.InvalidTokenError:
         return None, err("TOKEN_INVALID", "Invalid token.", status=401)
 
-    # TDP-M1-02: server-side inactivity check via Redis
     jti = payload.get("jti", "")
     if not await validate_session(jti):
         return None, err("TOKEN_EXPIRED", "Session expired. Please log in again.", status=401)
 
-    # Reset inactivity clock on every authenticated request
     await touch_session(jti)
 
     if roles and payload.get("role") not in roles:
@@ -371,8 +299,6 @@ async def _require_role(request: Request, *roles: str):
 
 # ─────────────────────────────────────────────────────────────
 # Audit helper
-# TDP-M1-01 P3: audit write must NOT be swallowed — raise on failure
-# FIX-6: replaced print() with logger.error() so Vercel captures it
 # ─────────────────────────────────────────────────────────────
 
 async def _audit(
@@ -382,7 +308,7 @@ async def _audit(
     ip: Optional[str],
     payload: Optional[dict] = None,
     *,
-    raise_on_failure: bool = False,   # set True for lockout events (TDP P3)
+    raise_on_failure: bool = False,
 ) -> None:
     try:
         pool = await get_pool()
@@ -398,9 +324,7 @@ async def _audit(
             )
     except Exception as exc:
         if raise_on_failure:
-            # TDP-M1-01 P3: audit failure must raise, not be swallowed
             raise RuntimeError(f"Audit write failed for {event_type}: {exc}") from exc
-        # FIX-6: use logger so Vercel / any log aggregator picks this up
         logger.error("[AUDIT ERROR] event=%s error=%s", event_type, exc)
 
 
@@ -411,19 +335,12 @@ async def _audit(
 router = APIRouter(prefix="/api/v1/auth", tags=["Auth & Identity"])
 
 
-# ════════════════════════════════════════════════════════════
-# POST /api/v1/auth/login
-# TDP-M1-01: FR03 lockout  — all 4 padlocks
-# TDP-M1-04: FR08 statuses — all 3 padlocks
-# ════════════════════════════════════════════════════════════
-
 @router.post("/login")
 async def login(body: LoginRequest, request: Request):
     ip   = request.client.host if request.client else None
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-
         row = await conn.fetchrow(
             """SELECT id::text, email, display_name, password_hash,
                       role, status::text, failed_attempts, locked_until,
@@ -432,19 +349,12 @@ async def login(body: LoginRequest, request: Request):
             body.email,
         )
 
-        # ── Unknown email ─────────────────────────────────────
-        # TDP-M1-04 P2: NOT_FOUND gets its own specific message
         if not row:
             await _audit("LOGIN_FAILED_UNKNOWN", None, None, ip, {"email": body.email})
-            return err(
-                "INVALID_CREDENTIALS",
-                "No account found for this email address.",
-                status=403,   # TDP-M1-04 P3: 403 not 401 for rejection
-            )
+            return err("INVALID_CREDENTIALS", "No account found for this email address.", status=403)
 
         user = dict(row)
 
-        # ── TDP-M1-01 P1/P2: lockout check ───────────────────
         if user["locked_until"]:
             lu = user["locked_until"]
             if lu.tzinfo is None:
@@ -455,83 +365,63 @@ async def login(body: LoginRequest, request: Request):
                     "ACCOUNT_LOCKED",
                     f"Account locked. Try again in {max(1, secs // 60)} minute(s).",
                     details={
-                        "unlocks_at":              lu.isoformat(),
-                        # TDP-M1-01 P2: expose exact remaining seconds
-                        "retry_after_seconds":     secs,
-                        "lock_duration_seconds":   LOCKOUT_DURATION_SECONDS,
+                        "unlocks_at":            lu.isoformat(),
+                        "retry_after_seconds":   secs,
+                        "lock_duration_seconds": LOCKOUT_DURATION_SECONDS,
                     },
                     status=403,
                 )
 
-        # ── TDP-M1-04 P1/P2/P3: suspended / expired ──────────
         status = user["status"]
         if status != "active":
             await _audit("LOGIN_REJECTED_INACTIVE", None, user["id"], ip, {"status": status})
-            # TDP-M1-04 P2: each status has its OWN exact message
             message = ACCOUNT_STATUS_MESSAGES.get(
-                status,
-                "Your account is not active. Contact the university helpdesk.",
+                status, "Your account is not active. Contact the university helpdesk."
             )
             return err(
                 "ACCOUNT_SUSPENDED" if status == "suspended" else "ACCOUNT_EXPIRED",
                 message,
-                # TDP-M1-04 P1: no token fields on rejection
                 details={"access_token": None, "refresh_token": None},
-                status=403,   # TDP-M1-04 P3: always 403, never 401
+                status=403,
             )
 
-        # ── FR02: wrong password ──────────────────────────────
         if not _verify_password(body.password, user["password_hash"]):
-
-            # FIX-7: new_count from fetchval is the single source of truth —
-            # avoids the race where two requests both read stale failed_attempts.
             new_count = await conn.fetchval(
                 "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE email = $1 RETURNING failed_attempts",
                 body.email,
             )
 
-            # TDP-M1-01 P5: attempts 1-4 → HTTP 401
             if new_count < MAX_FAILED_ATTEMPTS:
                 remaining = MAX_FAILED_ATTEMPTS - new_count
                 await _audit("LOGIN_FAILED_BAD_PW", None, user["id"], ip, {"attempt": new_count})
                 return err(
                     "INVALID_CREDENTIALS",
                     f"Invalid credentials. {remaining} attempt(s) remaining before lockout.",
-                    status=401,   # TDP-M1-01 P5: 401 for attempts < 5
+                    status=401,
                 )
 
-            # TDP-M1-01 P1: EXACTLY 5th attempt triggers lockout
-            # TDP-M1-01 P2: lock_duration is EXACTLY 900 seconds
             lock_until = _now() + timedelta(seconds=LOCKOUT_DURATION_SECONDS)
             await conn.execute(
                 "UPDATE users SET locked_until = $1 WHERE email = $2",
                 lock_until, body.email,
             )
-
-            # TDP-M1-01 P3: audit MUST be written — raise if it fails
             await _audit(
                 "ACCOUNT_LOCKED", None, user["id"], ip,
-                {
-                    "locked_until":          lock_until.isoformat(),
-                    "lock_duration_seconds": LOCKOUT_DURATION_SECONDS,
-                    "ip_address":            ip,
-                },
-                raise_on_failure=True,   # ← TDP P3: do NOT swallow
+                {"locked_until": lock_until.isoformat(), "lock_duration_seconds": LOCKOUT_DURATION_SECONDS, "ip_address": ip},
+                raise_on_failure=True,
             )
-
             return err(
                 "ACCOUNT_LOCKED",
                 "Account locked. Try again in 15 minutes.",
                 details={
                     "unlocks_at":            lock_until.isoformat(),
-                    "lock_duration_seconds": LOCKOUT_DURATION_SECONDS,  # EXACT 900
+                    "lock_duration_seconds": LOCKOUT_DURATION_SECONDS,
                     "retry_after_seconds":   LOCKOUT_DURATION_SECONDS,
                 },
-                status=403,   # TDP-M1-01 P5: only 5th attempt returns 403
+                status=403,
             )
 
-        # ── Success ───────────────────────────────────────────
-        # TDP-M1-01 P4: reset counter to EXACTLY 0, same transaction
+        # Success — reset counter
         await conn.execute(
             "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = $1",
             uuid.UUID(user["id"]),
@@ -540,19 +430,15 @@ async def login(body: LoginRequest, request: Request):
         access_token          = _create_access_token(user["id"], user["role"], user["email"])
         raw_refresh, ref_hash = _create_token_pair()
         refresh_expires       = _now() + timedelta(seconds=REFRESH_TTL_SECONDS)
+        decoded               = _decode_token(access_token)
+        jti                   = decoded["jti"]
 
-        # Decode to get the jti we just embedded in the access token
-        decoded = _decode_token(access_token)
-        jti     = decoded["jti"]
-
-        # FIX-4: store jti alongside token_hash so logout can target Redis keys
+        # Store session with jti and initial inactivity expiry
+        session_expires = _now() + timedelta(seconds=INACTIVITY_TTL_SECONDS)
         await conn.execute(
             "INSERT INTO sessions (user_id, token_hash, jti, expires_at) VALUES ($1, $2, $3, $4)",
-            uuid.UUID(user["id"]), ref_hash, jti, refresh_expires,
+            uuid.UUID(user["id"]), ref_hash, jti, session_expires,
         )
-
-    # TDP-M1-02: Store session in Redis with EXACT inactivity TTL
-    await touch_session(jti)   # sets Redis TTL to exactly 1800s
 
     await _audit("LOGIN_SUCCESS", user["id"], user["id"], ip, {"role": user["role"]})
 
@@ -570,10 +456,6 @@ async def login(body: LoginRequest, request: Request):
         },
     })
 
-
-# ════════════════════════════════════════════════════════════
-# GET /api/v1/auth/me
-# ════════════════════════════════════════════════════════════
 
 @router.get("/me")
 async def get_me(request: Request):
@@ -606,25 +488,16 @@ async def get_me(request: Request):
     })
 
 
-# ════════════════════════════════════════════════════════════
-# POST /api/v1/auth/logout   FR05
-# ════════════════════════════════════════════════════════════
-
 @router.post("/logout")
 async def logout(request: Request):
     payload, guard = await _require_role(request, "student", "staff", "admin")
     if guard:
         return guard
 
-    # FIX-5: revoke_all_sessions_for_user now correctly deletes Redis keys by jti
     await revoke_all_sessions_for_user(payload["user_id"])
     await _audit("LOGOUT", payload["user_id"], payload["user_id"], None, {})
     return ok({"logged_out": True})
 
-
-# ════════════════════════════════════════════════════════════
-# POST /api/v1/auth/password-reset/request   FR06
-# ════════════════════════════════════════════════════════════
 
 @router.post("/password-reset/request")
 async def password_reset_request(body: PasswordResetRequestBody, request: Request):
@@ -638,7 +511,6 @@ async def password_reset_request(body: PasswordResetRequestBody, request: Reques
         )
         if row:
             raw_token, token_hash = _create_token_pair()
-            # TDP-M1-03 P1: TTL is EXACTLY 900 seconds
             expires_at = _now() + timedelta(seconds=RESET_TTL_SECONDS)
             await conn.execute(
                 "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
@@ -646,17 +518,11 @@ async def password_reset_request(body: PasswordResetRequestBody, request: Reques
             )
             await _audit("PASSWORD_RESET_REQUESTED", row["id"], row["id"], ip, {})
 
-    # Always 202 — anti-enumeration
     return JSONResponse(
         {"success": True, "data": {"message": "If this email is registered, a reset link has been sent."}},
         status_code=202,
     )
 
-
-# ════════════════════════════════════════════════════════════
-# POST /api/v1/auth/password-reset/confirm   FR06
-# TDP-M1-03: all 4 padlocks
-# ════════════════════════════════════════════════════════════
 
 @router.post("/password-reset/confirm")
 async def password_reset_confirm(body: PasswordResetConfirmBody, request: Request):
@@ -665,8 +531,6 @@ async def password_reset_confirm(body: PasswordResetConfirmBody, request: Reques
     pool       = await get_pool()
 
     async with pool.acquire() as conn:
-
-        # ── Check token exists at all ─────────────────────────
         token_row = await conn.fetchrow(
             "SELECT user_id::text, used_at, expires_at FROM password_reset_tokens WHERE token_hash = $1",
             token_hash,
@@ -675,28 +539,16 @@ async def password_reset_confirm(body: PasswordResetConfirmBody, request: Reques
         if not token_row:
             return err("INVALID_TOKEN", "Reset link is invalid or has expired.", status=422)
 
-        # TDP-M1-03 P4: distinct error codes for each failure mode
         if token_row["used_at"] is not None:
-            return err(
-                "LINK_ALREADY_USED",
-                "This reset link has already been used. Please request a new one.",
-                status=422,
-            )
+            return err("LINK_ALREADY_USED", "This reset link has already been used. Please request a new one.", status=422)
 
         expires_at = token_row["expires_at"]
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
 
-        # TDP-M1-03 P1: check expiry BEFORE updating anything
         if _now() >= expires_at:
-            return err(
-                "LINK_EXPIRED",
-                "This reset link has expired. Please request a new one.",
-                status=422,
-            )
+            return err("LINK_EXPIRED", "This reset link has expired. Please request a new one.", status=422)
 
-        # TDP-M1-03 P2: mark used AND update password in the SAME transaction
-        # P3: expired token must NOT mutate password (already returned above)
         await conn.execute(
             "UPDATE password_reset_tokens SET used_at = NOW() WHERE token_hash = $1",
             token_hash,
@@ -706,20 +558,11 @@ async def password_reset_confirm(body: PasswordResetConfirmBody, request: Reques
             _hash_password(body.new_password),
             uuid.UUID(token_row["user_id"]),
         )
-
-        # FIX-5: revoke DB rows AND delete Redis session keys so stolen tokens
-        # can't be replayed after a password change. Previously only DB rows
-        # were revoked, leaving Redis keys alive for up to 30 minutes.
-        await _revoke_all_redis_sessions_for_user(token_row["user_id"], conn)
-
+        await _revoke_all_sessions_for_user_conn(token_row["user_id"], conn)
         await _audit("PASSWORD_RESET_COMPLETED", token_row["user_id"], token_row["user_id"], ip, {})
 
     return ok({"message": "Password updated. Please log in with your new password."})
 
-
-# ════════════════════════════════════════════════════════════
-# Admin — FR50 FR51
-# ════════════════════════════════════════════════════════════
 
 @router.get("/admin/users")
 async def list_users(request: Request, page: int = 1, per_page: int = 20):
