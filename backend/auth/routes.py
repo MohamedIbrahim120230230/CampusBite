@@ -135,6 +135,8 @@ async def close_pool() -> None:
 # Redis client  (FIX-1: TLS config for rediss:// on Vercel)
 # ─────────────────────────────────────────────────────────────
 
+import ssl as _ssl
+
 _redis: Optional[aioredis.Redis] = None
 
 
@@ -142,16 +144,19 @@ async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-        # FIX-1: ssl_cert_reqs=None disables cert verification which Vercel
-        # outbound TLS requires for Redis Cloud's rediss:// scheme.
-        # socket timeouts + retry prevent hanging cold-start connections.
+        # FIX-1: Vercel's Python runtime rejects Redis Cloud's TLS cert by
+        # default. We must pass an explicit SSLContext with cert verification
+        # disabled — ssl_cert_reqs=None alone is ignored by the vendored lib.
+        ssl_ctx = _ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = _ssl.CERT_NONE
         _redis = aioredis.from_url(
             redis_url,
             decode_responses=True,
             socket_connect_timeout=5,
             socket_timeout=5,
             retry_on_timeout=True,
-            ssl_cert_reqs=None,        # ← critical for Vercel → Redis Cloud TLS
+            ssl_context=ssl_ctx,       # ← explicit SSLContext, not ssl_cert_reqs
         )
     return _redis
 
