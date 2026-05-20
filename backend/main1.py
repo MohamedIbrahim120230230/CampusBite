@@ -56,7 +56,7 @@ def get_menu_items(category: str = None, search: str = None):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
-        SELECT id, name, category, price, stock_qty, max_order_qty, active, image_url
+        SELECT id, name, category, price, stock_qty, max_order_qty, active
         FROM menu_items
         WHERE active = TRUE
           AND (%s IS NULL OR category = %s)
@@ -82,12 +82,10 @@ def admin_create_item(data: dict):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
-        INSERT INTO menu_items (name, category, price, stock_qty, max_order_qty, active, description, image_url)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
+        INSERT INTO menu_items (name, category, price, stock_qty, active)
+        VALUES (%s, %s, %s, %s, %s) RETURNING *
     """, (data["name"], data["category"], data["price"],
-          data.get("stock_qty", 0), data.get("max_order_qty", 10),
-          data.get("active", True), data.get("description", ""),
-          data.get("image_url", "")))
+          data.get("stock_qty", 0), data.get("active", True)))
     item = cur.fetchone()
     conn.commit(); cur.close(); conn.close()
     return dict(item)
@@ -98,13 +96,10 @@ def admin_update_item(item_id: int, data: dict):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         UPDATE menu_items
-        SET name=%s, category=%s, price=%s, stock_qty=%s, max_order_qty=%s,
-            active=%s, description=%s, image_url=%s, updated_at=NOW()
+        SET name=%s, category=%s, price=%s, stock_qty=%s, active=%s, updated_at=NOW()
         WHERE id=%s RETURNING *
     """, (data["name"], data["category"], data["price"],
-          data.get("stock_qty", 0), data.get("max_order_qty", 10),
-          data.get("active", True), data.get("description", ""),
-          data.get("image_url", ""), item_id))
+          data.get("stock_qty", 0), data.get("active", True), item_id))
     item = cur.fetchone()
     conn.commit(); cur.close(); conn.close()
     return dict(item)
