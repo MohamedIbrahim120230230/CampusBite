@@ -243,7 +243,7 @@ export default function OrderPaymentApp() {
   const walletPhoneValid = isValidEgyptianPhone(walletPhone);
 
   const timerRef    = useRef(null);
-  const idempKeyRef = useRef(null);
+  const idempKeyRef = useRef(generateIdempotencyKey(currentUser.id));
 
   // ── Guard: redirect if no cart ─────────────────────────────
   useEffect(() => {
@@ -256,9 +256,6 @@ export default function OrderPaymentApp() {
   // ── Place order ────────────────────────────────────────────
   const placeOrder = async () => {
     setLoading(true);
-    if (!idempKeyRef.current) {
-      idempKeyRef.current = generateIdempotencyKey(currentUser.id);
-    }
     try {
       if (incomingLockedOrder?.id) {
         const enriched = {
