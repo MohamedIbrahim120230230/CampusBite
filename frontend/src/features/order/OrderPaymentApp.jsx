@@ -1,23 +1,8 @@
-
 // frontend/src/features/order/OrderPaymentApp.jsx
 // Member 3 — Order & Payment
 // FR08–FR17, FR22–FR31
 // TDP-M3-01 Stock Lock · TDP-M3-02 Idempotency
 // TDP-M3-03 Payment Resilience · TDP-M3-04 Load Shedding
-//
-// FIXES APPLIED:
-//   FIX-1: Retry works for ALL payment methods (cash, wallet, meal_plan, online)
-//   FIX-2: Card payment requires all 3 fields filled & valid before Pay button enables
-//   FIX-3: Wallet payment requires a valid 11-digit Egyptian phone number
-//   FIX-4: idempotency key generated fresh on every placeOrder call (ref removed)
-//
-// INTEGRATION:
-//   - Uses shared apiFetch / apiLogout from ../../shared/api
-//   - Cart state received from MenuPage via location.state
-//     { cart, subtotal, discount, total, voucherCode, lockedOrder }
-//   - Design tokens, navbar, fonts identical to all other pages
-//   - Nav tabs: Menu (always), Admin (admin only), Stock (admin/staff),
-//     Lifecycle (admin/staff) — mirrors MenuPage pattern
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -74,21 +59,6 @@ function generateIdempotencyKey(userId) {
 // Valid Egyptian phone: exactly 11 digits, starts with 01
 function isValidEgyptianPhone(phone) {
   return /^01\d{9}$/.test(phone.replace(/\s/g, ""));
-}
-
-// ── FIX-2: Card field validation helpers ──────────────────────
-function isValidCardNumber(val) {
-  // Accept 16 digits, spaces allowed (e.g. "4111 1111 1111 1111")
-  return /^\d{4}\s?\d{4}\s?\d{4}\s?\d{4}$/.test(val.trim());
-}
-
-function isValidExpiry(val) {
-  // MM/YY or MM / YY
-  return /^(0[1-9]|1[0-2])\s?\/\s?\d{2}$/.test(val.trim());
-}
-
-function isValidCVV(val) {
-  return /^\d{3,4}$/.test(val.trim());
 }
 
 // ── Toast hook ────────────────────────────────────────────────
@@ -221,6 +191,7 @@ export default function OrderPaymentApp() {
   const [payState,     setPayState]    = useState("idle");
   const [paymentId,    setPaymentId]   = useState(null);
   const [iframeUrl,    setIframeUrl]   = useState(null);
+  const [iframeLoaded, setIframeLoaded]= useState(false);
   const [payError,     setPayError]    = useState(null);
   const [retryCount,   setRetryCount]  = useState(0);
   const [timeLeft,     setTimeLeft]    = useState(null);
@@ -228,24 +199,12 @@ export default function OrderPaymentApp() {
   const [cancelModal,  setCancelModal] = useState(false);
   const [partialModal, setPartialModal]= useState(false);
 
-  // ── FIX-2: Card field state ────────────────────────────────
-  const [cardNumber,    setCardNumber]   = useState("");
-  const [cardExpiry,    setCardExpiry]   = useState("");
-  const [cardCVV,       setCardCVV]      = useState("");
-  const [cardTouched,   setCardTouched]  = useState({ number: false, expiry: false, cvv: false });
-
-  const cardNumberValid = isValidCardNumber(cardNumber);
-  const cardExpiryValid = isValidExpiry(cardExpiry);
-  const cardCVVValid    = isValidCVV(cardCVV);
-  const cardFormReady   = cardNumberValid && cardExpiryValid && cardCVVValid;
-
   // ── FIX-3: Wallet phone state ──────────────────────────────
   const [walletPhone,        setWalletPhone]       = useState("");
   const [walletPhoneTouched, setWalletPhoneTouched]= useState(false);
   const walletPhoneValid = isValidEgyptianPhone(walletPhone);
 
   const timerRef = useRef(null);
-  // FIX-4: idempKeyRef removed — key is now generated fresh inside placeOrder()
 
   // ── Guard: redirect if no cart ─────────────────────────────
   useEffect(() => {
@@ -274,8 +233,7 @@ export default function OrderPaymentApp() {
         return;
       }
 
-      // FIX-4: Generate a fresh idempotency key on every call instead of reusing
-      // a stale ref value. Each genuine new order attempt gets its own unique key.
+      // FIX-4: Generate a fresh idempotency key on every call
       const data = await apiFetch("/orders", {
         method: "POST",
         body: JSON.stringify({
@@ -316,15 +274,6 @@ export default function OrderPaymentApp() {
 
   // ── Start payment ──────────────────────────────────────────
   const startPayment = async () => {
-    // FIX-2: Block if online and card fields incomplete
-    if (payMethod === "online") {
-      setCardTouched({ number: true, expiry: true, cvv: true });
-      if (!cardFormReady) {
-        addToast("Please fill in all card details correctly.", "error");
-        return;
-      }
-    }
-
     // FIX-3: Block if wallet and phone invalid
     if (payMethod === "wallet") {
       setWalletPhoneTouched(true);
@@ -338,13 +287,11 @@ export default function OrderPaymentApp() {
     setTimeLeft(PAY_TIMEOUT_SECONDS);
     setStep("payment");
     setPayError(null);
+    setIframeLoaded(false);
     setLoading(true);
 
-    // FIX: cash, wallet, and meal_plan all confirm locally without a backend balance
-    // check — the same pattern as cash. This avoids the UUID cast error and missing
-    // balance rows that cause 422/500 failures for those methods.
+    // cash, wallet, and meal_plan confirm locally
     if (payMethod !== "online") {
-      // Fire-and-forget the backend notify; ignore errors so UX never breaks
       apiFetch("/payments/process", {
         method: "POST",
         body: JSON.stringify({
@@ -354,7 +301,6 @@ export default function OrderPaymentApp() {
           ...(payMethod === "wallet" ? { phone_number: walletPhone } : {}),
         }),
       }).catch(() => {});
-      // Short delay so the "processing" spinner is visible, then confirm
       setTimeout(() => {
         setPayState("success");
         setOrder(o => o ? { ...o, status: "confirmed", confirmed_at: new Date().toISOString() } : o);
@@ -363,7 +309,7 @@ export default function OrderPaymentApp() {
       return;
     }
 
-    // Online card payment — call Paymob to get iframe URL
+    // Online — call backend to get Paymob iframe URL
     try {
       const data = await apiFetch("/payments/paymob/initiate", {
         method: "POST",
@@ -380,17 +326,15 @@ export default function OrderPaymentApp() {
       });
       setPaymentId(data.payment_id || null);
       setIframeUrl(data.iframe_url);
-      // stays in "processing" — iframe handles the rest
     } catch (e) {
       setPayState("failed");
       setPayError({ message: e?.message || "Payment initiation failed.", code: e?.code });
-      setLoading(false);
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Payment countdown timer ────────────────────────────────
+  // ── Payment countdown timer (online only) ──────────────────
   useEffect(() => {
     if (step !== "payment" || payState !== "processing" || payMethod !== "online") return;
     timerRef.current = setInterval(() => {
@@ -410,12 +354,10 @@ export default function OrderPaymentApp() {
   // ── Listen for Paymob iframe result via postMessage ────────
   useEffect(() => {
     const handleMessage = (e) => {
-      // Paymob sends a message from the iframe when payment completes
       const d = typeof e.data === "string"
         ? (() => { try { return JSON.parse(e.data); } catch { return {}; } })()
         : (e.data || {});
 
-      // Paymob message has txn_response_code or success field
       if (!d.txn_response_code && d.type !== "paymob" && d.success === undefined) return;
 
       clearInterval(timerRef.current);
@@ -431,47 +373,6 @@ export default function OrderPaymentApp() {
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, []);
-
-  // ── Confirm payment (online only) ──────────────────────────
-  const confirmOrder = async () => {
-    clearInterval(timerRef.current);
-    setLoading(true);
-    try {
-      if (paymentId) {
-        await apiFetch(`/payments/${paymentId}/callback`, {
-          method: "POST",
-          body: JSON.stringify({ success: true, transaction_id: `TXN-${Date.now()}` }),
-        });
-      }
-      setPayState("success");
-      setOrder(o => o ? { ...o, status: "confirmed", confirmed_at: new Date().toISOString() } : o);
-    } catch (e) {
-      setPayState("failed");
-      setPayError({ message: e?.message || "Payment confirmation failed.", code: e?.code });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ── Simulate gateway failure ───────────────────────────────
-  const simulateFailure = async (reason) => {
-    clearInterval(timerRef.current);
-    if (paymentId) {
-      try {
-        await apiFetch(`/payments/${paymentId}/callback`, {
-          method: "POST",
-          body: JSON.stringify({ success: false, failure_reason: reason }),
-        });
-      } catch {}
-    }
-    setPayState("failed");
-    const msgs = {
-      insufficient_funds: "Payment declined — insufficient funds.",
-      card_expired:       "Payment declined — card expired.",
-      gateway_error:      "Payment service unavailable. Please try again.",
-    };
-    setPayError({ message: msgs[reason] || "Payment declined.", code: reason.toUpperCase() });
-  };
 
   // ── FIX-1: Retry payment — works for ALL methods ───────────
   const retryPayment = async () => {
@@ -490,9 +391,8 @@ export default function OrderPaymentApp() {
       setPayState("processing");
       setPayError(null);
       setTimeLeft(PAY_TIMEOUT_SECONDS);
+      setIframeLoaded(false);
 
-      // FIX-1: For non-online methods, automatically re-confirm after short delay
-      // Previously only online had the timer started; now non-online retries also resolve
       if (payMethod !== "online") {
         setTimeout(async () => {
           try {
@@ -515,7 +415,29 @@ export default function OrderPaymentApp() {
             setLoading(false);
           }
         }, 800);
-        return; // loading stays true until setTimeout resolves
+        return;
+      }
+
+      // For online retry — re-initiate Paymob
+      try {
+        const data = await apiFetch("/payments/paymob/initiate", {
+          method: "POST",
+          body: JSON.stringify({
+            order_id:   order.id,
+            amount_egp: order.total,
+            billing: {
+              first_name: currentUser.name?.split(" ")[0] || "Student",
+              last_name:  currentUser.name?.split(" ")[1] || "User",
+              email:      currentUser.email || "student@uni.edu",
+              phone:      "01000000000",
+            },
+          }),
+        });
+        setPaymentId(data.payment_id || null);
+        setIframeUrl(data.iframe_url);
+      } catch (e) {
+        setPayState("failed");
+        setPayError({ message: e?.message || "Payment initiation failed.", code: e?.code });
       }
     } catch (e) {
       if (e?.code === "MAX_RETRIES_EXCEEDED") {
@@ -526,7 +448,6 @@ export default function OrderPaymentApp() {
         addToast(e?.message || "Retry failed.", "error");
       }
     } finally {
-      // For online retries, release loading here; non-online releases in the setTimeout above
       if (payMethod === "online") setLoading(false);
     }
   };
@@ -712,10 +633,10 @@ export default function OrderPaymentApp() {
                 <h3 className="op-section-label">Payment Method</h3>
                 <div className="op-pay-methods">
                   {[
-                    { id: "online",    icon: "bi-credit-card-2-front-fill", label: "Online Payment", desc: "Credit / debit card"      },
-                    { id: "cash",      icon: "bi-cash-coin",                 label: "Cash on Pickup", desc: "Pay when you collect"     },
-                    { id: "wallet",    icon: "bi-wallet2",                   label: "Wallet",          desc: "Digital wallet balance"  },
-                    { id: "meal_plan", icon: "bi-mortarboard-fill",          label: "Meal Plan",       desc: "University meal credits" },
+                    { id: "online",    icon: "bi-credit-card-2-front-fill", label: "Online Payment", desc: "Credit / debit card via Paymob" },
+                    { id: "cash",      icon: "bi-cash-coin",                 label: "Cash on Pickup", desc: "Pay when you collect"           },
+                    { id: "wallet",    icon: "bi-wallet2",                   label: "Wallet",          desc: "Digital wallet balance"         },
+                    { id: "meal_plan", icon: "bi-mortarboard-fill",          label: "Meal Plan",       desc: "University meal credits"        },
                   ].map(m => (
                     <button
                       key={m.id}
@@ -734,7 +655,23 @@ export default function OrderPaymentApp() {
                   ))}
                 </div>
 
-                {/* ── FIX-3: Wallet phone number field ── */}
+                {/* Online payment info banner — no card fields, Paymob handles it */}
+                {payMethod === "online" && (
+                  <div className="op-paymob-info">
+                    <div className="op-paymob-info-icon">
+                      <i className="bi bi-shield-lock-fill" />
+                    </div>
+                    <div>
+                      <div className="op-paymob-info-title">Secured by Paymob</div>
+                      <div className="op-paymob-info-desc">
+                        You'll be redirected to Paymob's secure payment page to enter your card details.
+                        All transactions are encrypted and PCI-DSS compliant.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* FIX-3: Wallet phone number field */}
                 {payMethod === "wallet" && (
                   <div className="op-wallet-phone-wrap">
                     <div className="op-field">
@@ -767,79 +704,6 @@ export default function OrderPaymentApp() {
                   </div>
                 )}
 
-                {/* ── FIX-2: Card fields shown inline on checkout when Online is selected ── */}
-                {payMethod === "online" && (
-                  <div className="op-wallet-phone-wrap">
-                    <h4 className="op-field-label" style={{ fontSize: 12, marginBottom: 10 }}>
-                      <i className="bi bi-shield-lock" style={{ marginRight: 5 }} />
-                      Card Details
-                    </h4>
-                    <div className="op-card-form" style={{ margin: 0 }}>
-                      <div className="op-field">
-                        <label className="op-field-label">Card Number</label>
-                        <input
-                          className={`op-input${cardTouched.number && !cardNumberValid ? " op-input--error" : cardTouched.number && cardNumberValid ? " op-input--valid" : ""}`}
-                          placeholder="4111 1111 1111 1111"
-                          style={{ fontFamily: "monospace" }}
-                          maxLength={19}
-                          value={cardNumber}
-                          onChange={e => setCardNumber(e.target.value)}
-                          onBlur={() => setCardTouched(p => ({ ...p, number: true }))}
-                        />
-                        {cardTouched.number && !cardNumberValid && (
-                          <span className="op-field-error">
-                            <i className="bi bi-exclamation-circle" style={{ marginRight: 4 }} />
-                            Enter a valid 16-digit card number
-                          </span>
-                        )}
-                      </div>
-                      <div className="op-field-row">
-                        <div className="op-field">
-                          <label className="op-field-label">Expiry</label>
-                          <input
-                            className={`op-input${cardTouched.expiry && !cardExpiryValid ? " op-input--error" : cardTouched.expiry && cardExpiryValid ? " op-input--valid" : ""}`}
-                            placeholder="MM / YY"
-                            maxLength={7}
-                            value={cardExpiry}
-                            onChange={e => setCardExpiry(e.target.value)}
-                            onBlur={() => setCardTouched(p => ({ ...p, expiry: true }))}
-                          />
-                          {cardTouched.expiry && !cardExpiryValid && (
-                            <span className="op-field-error">
-                              <i className="bi bi-exclamation-circle" style={{ marginRight: 4 }} />
-                              Use MM/YY format
-                            </span>
-                          )}
-                        </div>
-                        <div className="op-field">
-                          <label className="op-field-label">CVV</label>
-                          <input
-                            className={`op-input${cardTouched.cvv && !cardCVVValid ? " op-input--error" : cardTouched.cvv && cardCVVValid ? " op-input--valid" : ""}`}
-                            placeholder="•••"
-                            type="password"
-                            maxLength={4}
-                            value={cardCVV}
-                            onChange={e => setCardCVV(e.target.value)}
-                            onBlur={() => setCardTouched(p => ({ ...p, cvv: true }))}
-                          />
-                          {cardTouched.cvv && !cardCVVValid && (
-                            <span className="op-field-error">
-                              <i className="bi bi-exclamation-circle" style={{ marginRight: 4 }} />
-                              3–4 digits
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {cardTouched.number && cardTouched.expiry && cardTouched.cvv && cardFormReady && (
-                        <span className="op-field-ok">
-                          <i className="bi bi-check-circle" style={{ marginRight: 4 }} />
-                          Card details verified
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
                 <div className="op-card-actions">
                   <button className="op-ghost-btn" onClick={goBackToMenu}>
                     <i className="bi bi-arrow-left" style={{ marginRight: 6 }} />Back to Menu
@@ -847,7 +711,9 @@ export default function OrderPaymentApp() {
                   <button className="op-primary-btn" onClick={startPayment} disabled={loading}>
                     {loading
                       ? <><span className="op-spinner-sm" /> Processing…</>
-                      : <>Proceed to Payment <i className="bi bi-arrow-right" style={{ marginLeft: 6 }} /></>
+                      : payMethod === "online"
+                        ? <>Pay {Number(order.total).toFixed(2)} EGP <i className="bi bi-box-arrow-up-right" style={{ marginLeft: 6 }} /></>
+                        : <>Proceed to Payment <i className="bi bi-arrow-right" style={{ marginLeft: 6 }} /></>
                     }
                   </button>
                 </div>
@@ -858,53 +724,67 @@ export default function OrderPaymentApp() {
           {/* ══ PAYMENT STEP ══ */}
           {step === "payment" && order && (
             <div className="op-centered">
-              <div className="op-card op-card--narrow">
+              <div className={`op-card${payMethod === "online" && payState === "processing" ? " op-card--payment" : " op-card--narrow"}`}>
 
-                {/* Online — processing: show Paymob iframe */}
+                {/* Online — processing: show Paymob iframe full-width */}
                 {payState === "processing" && payMethod === "online" && (
                   <>
-                    <div className="op-pay-hero" style={{ marginBottom: 12 }}>
-                      <div className="op-pay-icon-wrap">
-                        <i className="bi bi-shield-lock-fill" />
+                    <div className="op-pay-header">
+                      <div className="op-pay-header-left">
+                        <div className="op-pay-icon-wrap">
+                          <i className="bi bi-shield-lock-fill" />
+                        </div>
+                        <div>
+                          <h2 className="op-card-title" style={{ marginBottom: 2 }}>Secure Payment</h2>
+                          <p className="op-muted" style={{ fontSize: 12 }}>Order #{order.id}</p>
+                        </div>
                       </div>
-                      <h2 className="op-card-title">Secure Payment</h2>
-                      <p className="op-pay-amount">{Number(order.total).toFixed(2)} EGP</p>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                        <span className="op-pay-amount-chip">{Number(order.total).toFixed(2)} EGP</span>
+                        <div className="op-countdown">
+                          <i className="bi bi-clock" />
+                          <span className="op-countdown-timer">{fmtTime(timeLeft || 0)}</span>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="op-countdown">
-                      <i className="bi bi-clock" />
-                      <span>Session expires in </span>
-                      <span className="op-countdown-timer">{fmtTime(timeLeft || 0)}</span>
+                    {/* Paymob iframe — takes up the full card width */}
+                    <div className="op-iframe-wrap">
+                      {!iframeLoaded && (
+                        <div className="op-iframe-loading">
+                          <div className="op-spinner op-spinner--lg" />
+                          <p style={{ fontSize: 13, color: "var(--uc-muted)", marginTop: 12 }}>
+                            Loading secure payment page…
+                          </p>
+                          <p style={{ fontSize: 11, color: "var(--uc-muted)", marginTop: 4 }}>
+                            Connecting to Paymob
+                          </p>
+                        </div>
+                      )}
+                      {iframeUrl && (
+                        <iframe
+                          src={iframeUrl}
+                          title="Paymob Payment"
+                          className={`op-paymob-iframe${iframeLoaded ? " op-paymob-iframe--visible" : ""}`}
+                          allow="payment"
+                          onLoad={() => setIframeLoaded(true)}
+                        />
+                      )}
                     </div>
-
-                    {/* Paymob hosted iframe — loads the real card form */}
-                    {iframeUrl ? (
-                      <iframe
-                        src={iframeUrl}
-                        title="Paymob Payment"
-                        style={{
-                          width:        "100%",
-                          height:       460,
-                          border:       "none",
-                          borderRadius: "var(--uc-rs)",
-                          marginTop:    12,
-                        }}
-                        allow="payment"
-                      />
-                    ) : (
-                      <div className="op-loading" style={{ padding: "40px 20px" }}>
-                        <div className="op-spinner" />
-                        <span style={{ fontSize: 13 }}>Loading payment page…</span>
-                      </div>
-                    )}
 
                     {retryCount > 0 && (
                       <p className="op-retry-hint">Attempt {retryCount + 1} of {MAX_PAYMENT_RETRIES + 1}</p>
                     )}
+
+                    <div style={{ textAlign: "center", marginTop: 12 }}>
+                      <button className="op-ghost-btn" onClick={() => { clearInterval(timerRef.current); setStep("checkout"); }}>
+                        <i className="bi bi-arrow-left" style={{ marginRight: 6 }} />Change Payment Method
+                      </button>
+                    </div>
                   </>
                 )}
 
-                {/* FIX-1: Non-online — processing (now shows for cash/wallet/meal_plan retries too) */}
+                {/* Non-online — processing spinner */}
                 {payState === "processing" && payMethod !== "online" && (
                   <div className="op-pay-hero">
                     <div className="op-spinner op-spinner--lg" />
@@ -932,7 +812,7 @@ export default function OrderPaymentApp() {
                   </div>
                 )}
 
-                {/* FIX-1: Failed — retry works for ALL methods */}
+                {/* Failed */}
                 {payState === "failed" && (
                   <div className="op-pay-hero">
                     <div className="op-pay-icon-wrap op-pay-icon-wrap--danger">
@@ -954,7 +834,6 @@ export default function OrderPaymentApp() {
                       )}
                     </div>
 
-                    {/* FIX-1: Retry button now appears for ALL payment methods */}
                     {retryCount < MAX_PAYMENT_RETRIES ? (
                       <div className="op-card-actions" style={{ marginTop: 16 }}>
                         <button className="op-ghost-btn" onClick={() => setStep("checkout")}>Change Method</button>
@@ -1230,6 +1109,8 @@ const OP_CSS = `
     padding:clamp(22px,4vw,36px); width:100%; max-width:640px;
     box-shadow:0 24px 48px rgba(0,0,0,.45); animation:fadeUp .35s ease both; }
   .op-card--narrow { max-width:480px; }
+  /* Wider card for the Paymob iframe */
+  .op-card--payment { max-width:780px; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
   .op-card-title { font-family:var(--fd); font-size:clamp(18px,2.5vw,22px); font-weight:700;
     letter-spacing:-.02em; margin-bottom:16px; }
@@ -1265,14 +1146,36 @@ const OP_CSS = `
   .op-pay-desc  { font-size:11px; color:var(--uc-muted); margin-top:1px; }
   .op-pay-check { position:absolute; top:10px; right:10px; color:var(--uc-acc); font-size:14px; }
 
-  /* ── FIX-3: Wallet phone wrap / FIX-2: Card details wrap ── */
+  /* ── Paymob info banner (replaces card fields) ── */
+  .op-paymob-info { display:flex; align-items:flex-start; gap:14px;
+    background:rgba(59,158,218,.06); border:1px solid rgba(59,158,218,.2);
+    border-radius:var(--uc-rs); padding:14px 16px; margin-bottom:16px; }
+  .op-paymob-info-icon { width:38px; height:38px; border-radius:50%; flex-shrink:0;
+    background:rgba(59,158,218,.12); border:1px solid rgba(59,158,218,.3);
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px; color:var(--uc-acc); }
+  .op-paymob-info-title { font-size:13px; font-weight:700; color:var(--uc-acc); margin-bottom:3px; }
+  .op-paymob-info-desc  { font-size:12px; color:var(--uc-muted); line-height:1.5; }
+
+  /* ── Wallet phone wrap ── */
   .op-wallet-phone-wrap { background:rgba(59,158,218,.04); border:1px solid rgba(59,158,218,.15);
     border-radius:var(--uc-rs); padding:14px 16px; margin-bottom:16px; }
 
-  /* Card summary chip shown on payment step */
-  .op-card-summary { display:flex; align-items:center; gap:12px;
-    background:rgba(34,201,147,.06); border:1px solid rgba(34,201,147,.2);
-    border-radius:var(--uc-rs); padding:12px 14px; margin:12px 0 16px; width:100%; }
+  /* ── Payment step header ── */
+  .op-pay-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:12px; }
+  .op-pay-header-left { display:flex; align-items:center; gap:14px; }
+  .op-pay-amount-chip { font-family:var(--fd); font-size:18px; font-weight:700;
+    color:var(--uc-acc); background:rgba(59,158,218,.1); border:1px solid rgba(59,158,218,.25);
+    border-radius:var(--uc-rs); padding:5px 14px; }
+
+  /* ── Paymob iframe container ── */
+  .op-iframe-wrap { position:relative; border-radius:var(--uc-rs); overflow:hidden;
+    border:1px solid var(--uc-brd); background:rgba(255,255,255,.02);
+    min-height:520px; margin-bottom:14px; }
+  .op-iframe-loading { position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; }
+  .op-paymob-iframe { width:100%; height:520px; border:none; display:none; }
+  .op-paymob-iframe--visible { display:block; }
 
   /* ── Payment hero ── */
   .op-pay-hero { display:flex; flex-direction:column; align-items:center; text-align:center; gap:8px; }
@@ -1287,14 +1190,12 @@ const OP_CSS = `
   .op-muted { font-size:13px; color:var(--uc-muted); line-height:1.5; }
 
   /* Countdown */
-  .op-countdown { display:flex; align-items:center; gap:8px; justify-content:center;
+  .op-countdown { display:inline-flex; align-items:center; gap:6px;
     background:rgba(246,173,85,.08); border:1px solid rgba(246,173,85,.25);
-    border-radius:var(--uc-rs); padding:10px 16px; font-size:13px;
-    color:var(--uc-warn); margin:12px 0; }
-  .op-countdown-timer { font-family:monospace; font-size:18px; font-weight:700; color:var(--uc-gold); }
+    border-radius:var(--uc-rs); padding:5px 12px; font-size:12px; color:var(--uc-warn); }
+  .op-countdown-timer { font-family:monospace; font-size:15px; font-weight:700; color:var(--uc-gold); }
 
-  /* Card form */
-  .op-card-form { width:100%; display:flex; flex-direction:column; gap:12px; margin:12px 0; }
+  /* Field */
   .op-field { display:flex; flex-direction:column; gap:5px; }
   .op-field-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .op-field-label { font-size:11px; font-weight:600; letter-spacing:.07em; text-transform:uppercase;
@@ -1304,20 +1205,13 @@ const OP_CSS = `
     outline:none; transition:border-color .2s,box-shadow .2s; width:100%; }
   .op-input:focus { border-color:var(--uc-acc); box-shadow:0 0 0 3px rgba(59,158,218,.12); }
   .op-input::placeholder { color:rgba(107,122,144,.5); }
-  /* FIX-2 & FIX-3: validation states */
   .op-input--error { border-color:var(--uc-danger) !important; box-shadow:0 0 0 3px rgba(245,101,101,.10); }
   .op-input--valid { border-color:var(--uc-acc2) !important; }
   .op-field-error { font-size:11px; color:var(--uc-danger); display:flex; align-items:center; }
   .op-field-ok    { font-size:11px; color:var(--uc-acc2);   display:flex; align-items:center; }
 
-  /* Sim / retry */
+  /* Retry */
   .op-retry-hint { font-size:11px; color:var(--uc-muted); text-align:center; margin-top:6px; }
-  .op-sim-row { display:flex; align-items:center; gap:6px; margin-top:14px; flex-wrap:wrap; justify-content:center; }
-  .op-sim-label { font-size:11px; color:var(--uc-muted); }
-  .op-sim-btn { background:rgba(245,101,101,.08); border:1px solid rgba(245,101,101,.25);
-    border-radius:var(--uc-rs); color:var(--uc-danger); font-family:var(--fb);
-    font-size:11px; font-weight:600; padding:5px 10px; cursor:pointer; transition:all .2s; }
-  .op-sim-btn:hover { background:rgba(245,101,101,.16); }
 
   /* Error box */
   .op-err-box { background:rgba(245,101,101,.07); border:1px solid rgba(245,101,101,.22);
@@ -1426,5 +1320,8 @@ const OP_CSS = `
     .op-card-actions { flex-direction:column; }
     .op-card-actions button { width:100%; justify-content:center; }
     .mp-nav-tabs { display:none; }
+    .op-pay-header { flex-direction:column; align-items:flex-start; }
+    .op-paymob-iframe { height:460px; }
+    .op-iframe-wrap { min-height:460px; }
   }
 `;

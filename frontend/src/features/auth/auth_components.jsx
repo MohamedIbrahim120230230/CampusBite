@@ -197,23 +197,27 @@ export function Login({ onLoginSuccess, navigate }) {
               {error && <ErrorBanner error={error} lockDisplay={lockDisplay} />}
 
               <form onSubmit={handleLogin} noValidate data-testid="login-form">
+
+                {/* ── Email field ── */}
                 <div className="uc-field">
                   <label htmlFor="uc-email" className="uc-label">University Email</label>
                   <div className="uc-iw">
-                    <i className="bi bi-envelope uc-iico" aria-hidden="true" />
-                    <input
-                      ref={emailRef}
-                      id="uc-email"
-                      data-testid="email-input"
-                      type="email"
-                      className={`uc-input${error ? " uc-input--err" : ""}`}
-                      placeholder="name.ID@ejust.edu.eg"
-                      value={email}
-                      onChange={(e) => { setEmail(e.target.value); setError(null); }}
-                      disabled={loading || secondsLeft > 0}
-                      required
-                      autoComplete="username"
-                    />
+                    <div className="uc-input-wrap">
+                      <i className="bi bi-envelope uc-iico" aria-hidden="true" />
+                      <input
+                        ref={emailRef}
+                        id="uc-email"
+                        data-testid="email-input"
+                        type="email"
+                        className={`uc-input${error ? " uc-input--err" : ""}`}
+                        placeholder="name.ID@ejust.edu.eg"
+                        value={email}
+                        onChange={(e) => { setEmail(e.target.value); setError(null); }}
+                        disabled={loading || secondsLeft > 0}
+                        required
+                        autoComplete="username"
+                      />
+                    </div>
                     {email.includes("@") && (
                       <span className={`uc-domain-badge ${isUniversityEmail(email) ? "valid" : "invalid"}`}>
                         <i className={`bi ${isUniversityEmail(email) ? "bi-check-circle-fill" : "bi-x-circle-fill"}`} />
@@ -223,6 +227,7 @@ export function Login({ onLoginSuccess, navigate }) {
                   </div>
                 </div>
 
+                {/* ── Password field ── */}
                 <div className="uc-field">
                   <div className="uc-field-row">
                     <label htmlFor="uc-pw" className="uc-label" style={{ marginBottom: 0 }}>Password</label>
@@ -231,24 +236,26 @@ export function Login({ onLoginSuccess, navigate }) {
                     </button>
                   </div>
                   <div className="uc-iw">
-                    <i className="bi bi-lock uc-iico" aria-hidden="true" />
-                    <input
-                      id="uc-pw"
-                      data-testid="password-input"
-                      type={showPass ? "text" : "password"}
-                      className={`uc-input${error ? " uc-input--err" : ""}`}
-                      placeholder="Min. 8 characters"
-                      value={password}
-                      onChange={(e) => { setPassword(e.target.value); setError(null); }}
-                      disabled={loading || secondsLeft > 0}
-                      required
-                      autoComplete="current-password"
-                    />
-                    <button type="button" className="uc-eye" onClick={() => setShowPass(v => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
-                      <i className={`bi ${showPass ? "bi-eye-slash" : "bi-eye"}`} aria-hidden="true" />
-                    </button>
+                    <div className="uc-input-wrap">
+                      <i className="bi bi-lock uc-iico" aria-hidden="true" />
+                      <input
+                        id="uc-pw"
+                        data-testid="password-input"
+                        type={showPass ? "text" : "password"}
+                        className={`uc-input${error ? " uc-input--err" : ""}`}
+                        placeholder="Min. 8 characters"
+                        value={password}
+                        onChange={(e) => { setPassword(e.target.value); setError(null); }}
+                        disabled={loading || secondsLeft > 0}
+                        required
+                        autoComplete="current-password"
+                      />
+                      <button type="button" className="uc-eye" onClick={() => setShowPass(v => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
+                        <i className={`bi ${showPass ? "bi-eye-slash" : "bi-eye"}`} aria-hidden="true" />
+                      </button>
+                    </div>
+                    {password.length > 0 && <StrengthBar pw={password} />}
                   </div>
-                  {password.length > 0 && <StrengthBar pw={password} />}
                 </div>
 
                 <button
@@ -372,13 +379,15 @@ function ResetRequest({ onBack, onSent, apiFetch }) {
         <div className="uc-field">
           <label htmlFor="uc-rem" className="uc-label">University Email</label>
           <div className="uc-iw">
-            <i className="bi bi-envelope uc-iico" aria-hidden="true" />
-            <input
-              id="uc-rem" data-testid="reset-email-input" type="email"
-              className="uc-input" placeholder="name.ID@ejust.edu.eg"
-              value={email} onChange={(e) => setEmail(e.target.value)}
-              required disabled={loading} autoFocus
-            />
+            <div className="uc-input-wrap">
+              <i className="bi bi-envelope uc-iico" aria-hidden="true" />
+              <input
+                id="uc-rem" data-testid="reset-email-input" type="email"
+                className="uc-input" placeholder="name.ID@ejust.edu.eg"
+                value={email} onChange={(e) => setEmail(e.target.value)}
+                required disabled={loading} autoFocus
+              />
+            </div>
           </div>
         </div>
         <button type="submit" data-testid="reset-submit" className="uc-btn" disabled={loading || !email}>
@@ -493,25 +502,30 @@ const CSS = `
   .uc-field { margin-bottom:20px; }
   .uc-field-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
   .uc-label { display:block; font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--uc-muted); margin-bottom:8px; }
-  .uc-iw { position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
-  .uc-iico { position:absolute; left:16px; z-index:1; color:var(--uc-muted); font-size:15px; pointer-events:none; transition:color .25s ease; }
-  .uc-iw:focus-within .uc-iico { color:var(--uc-acc); }
+
+  /* ── FIXED: iw is now a column container; input-wrap holds the icon+input row ── */
+  .uc-iw { display:flex; flex-direction:column; gap:8px; width:100%; }
+  .uc-input-wrap { position:relative; display:flex; align-items:center; width:100%; }
+
+  .uc-iico { position:absolute; left:16px; top:50%; transform:translateY(-50%); z-index:2; color:var(--uc-muted); font-size:15px; pointer-events:none; transition:color .25s ease; }
+  .uc-input-wrap:focus-within .uc-iico { color:var(--uc-acc); }
+
   .uc-input { width:100%; background:var(--uc-inp); border:1px solid rgba(148,163,184,.15); border-radius:var(--uc-rs); color:var(--uc-text); font-family:var(--fb); font-size:15px; padding:14px 48px; outline:none; transition:all .25s ease; -webkit-appearance:none; }
   .uc-input::placeholder { color:rgba(148,163,184,.5); }
   .uc-input:focus { border-color:var(--uc-acc); background:rgba(180,142,50,.05); box-shadow:0 0 0 4px rgba(180,142,50,.12); }
   .uc-input:disabled { opacity:.4; cursor:not-allowed; }
   .uc-input--err { border-color:var(--uc-danger) !important; }
   .uc-input--err:focus { box-shadow:0 0 0 4px rgba(239,68,68,.15) !important; }
-  .uc-eye { position:absolute; right:14px; background:none; border:none; cursor:pointer; color:var(--uc-muted); font-size:15px; padding:6px; transition:color .25s ease; border-radius:6px; }
+  .uc-eye { position:absolute; right:14px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--uc-muted); font-size:15px; padding:6px; transition:color .25s ease; border-radius:6px; z-index:2; }
   .uc-eye:hover { color:var(--uc-acc); background:rgba(180,142,50,.1); }
   .uc-link-btn { background:none; border:none; cursor:pointer; padding:0; font-family:var(--fb); font-size:12px; font-weight:600; color:var(--uc-acc); transition:opacity .25s ease; }
   .uc-link-btn:hover { opacity:.75; }
-  .uc-domain-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:4px 12px; border-radius:100px; margin-top:8px; width:100%; }
+  .uc-domain-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:4px 12px; border-radius:100px; width:100%; }
   .uc-domain-badge.valid { background:rgba(34,197,94,.1); color:var(--uc-success); border:1px solid rgba(34,197,94,.25); }
   .uc-domain-badge.invalid { background:rgba(239,68,68,.1); color:var(--uc-danger); border:1px solid rgba(239,68,68,.25); }
   .uc-hint { font-size:12px; color:var(--uc-muted); margin-top:18px; text-align:center; line-height:1.5; }
   .uc-hint strong { color:var(--uc-acc); }
-  .uc-str-wrap { display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .uc-str-wrap { display:flex; align-items:center; gap:10px; width:100%; }
   .uc-str-bars { display:flex; gap:5px; flex:1; }
   .uc-str-bar { flex:1; height:4px; border-radius:3px; background:rgba(148,163,184,.2); transition:background .3s ease; }
   .uc-str-bar--weak { background:var(--uc-danger); }
